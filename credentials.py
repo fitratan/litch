@@ -6,7 +6,7 @@ from typing import List, Tuple, Optional
 DEFAULT_CREDENTIALS = [
     # Top Field Cheat Sheet
     ("admin", "dnsolution"),
-    ("nara", "near"),
+    ("admin", "admin"),               # Universal Factory Default
     ("telecomadmin", "admintelecom"), # Huawei GPON
     ("admin", "Telkomdso123"),        # ZTE F609 V1-V3
     ("admin", "telkomdso123"),        # ZTE F609 V1-V3 (lowercase)
@@ -26,6 +26,7 @@ DEFAULT_CREDENTIALS = [
     ("admin", "1234"),
     ("admin", "password"),
     ("user", "user"),
+    ("nara", "near"),
     ("user", "user123"),
     ("user", "user1234"),
 

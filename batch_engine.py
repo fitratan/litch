@@ -9,12 +9,13 @@ from credentials import get_credentials, get_vendor_prioritized_credentials, sav
 
 def ensure_authenticated_device(
     device: Dict[str, Any],
-    custom_creds: List[Tuple[str, str]] = None
+    custom_creds: List[Tuple[str, str]] = None,
+    require_admin: bool = False
 ) -> Tuple[bool, Optional[str], Optional[str], Any]:
     """
     Ensure the ONT adapter is authenticated cleanly:
-    - Uses existing authenticated session if active
-    - Prioritizes custom creds + vendor-specific defaults
+    - Uses existing authenticated session if active (and meets admin requirement)
+    - Prioritizes administrator / superadmin credentials over standard user accounts
     - Automatically falls back to ZTEAdapter if GenericAdapter was initially assigned
     - Caches successful credentials for subsequent operations
     """
@@ -66,8 +67,11 @@ def ensure_authenticated_device(
             adapter = GenericAdapter(ip, port, timeout=3)
         device["adapter"] = adapter
 
-    if adapter and getattr(adapter, "authenticated_user", None):
-        return True, adapter.authenticated_user, adapter.authenticated_password, adapter
+    curr_user = getattr(adapter, "authenticated_user", None)
+    if adapter and curr_user:
+        is_low_priv = curr_user.lower() in ["nara", "user", "useradmin", "guest"]
+        if not (require_admin and is_low_priv):
+            return True, adapter.authenticated_user, adapter.authenticated_password, adapter
 
     # Build prioritized credential candidates
     v_creds = get_vendor_prioritized_credentials(device.get("vendor", ""), ip_or_mac=ip)
@@ -76,9 +80,22 @@ def ensure_authenticated_device(
         for c in custom_creds + v_creds:
             if c not in combined:
                 combined.append(c)
-        creds_list = combined[:25]
+        raw_list = combined[:35]
     else:
-        creds_list = v_creds[:25]
+        raw_list = v_creds[:35]
+
+    def credential_role_score(cred):
+        u, p = cred
+        u_l = u.lower().strip()
+        if u_l in ["admin", "telecomadmin", "superadmin", "root"]:
+            return 100
+        elif "admin" in u_l or "root" in u_l or "support" in u_l:
+            return 80
+        elif u_l in ["nara", "user", "useradmin", "guest"]:
+            return 10
+        return 30
+
+    creds_list = sorted(raw_list, key=credential_role_score, reverse=True)
 
     # 1. If GenericAdapter was assigned, test ZTEAdapter first (95%+ of ONTs on ISP subnet are ZTE)
     if adapter and adapter.__class__.__name__ == "GenericAdapter":
@@ -214,7 +231,7 @@ def process_single_ont_password_change(
         "message": "Authentication failed with all candidate credentials",
     }
 
-    ok, user_used, pass_used, adapter = ensure_authenticated_device(device, custom_creds)
+    ok, user_used, pass_used, adapter = ensure_authenticated_device(device, custom_creds, require_admin=True)
     if not ok:
         return result
 
@@ -606,7 +623,7 @@ def process_single_ont_anti_reset(
         "message": "Authentication failed with all candidate credentials",
     }
 
-    ok, user_used, pass_used, adapter = ensure_authenticated_device(device, custom_creds)
+    ok, user_used, pass_used, adapter = ensure_authenticated_device(device, custom_creds, require_admin=True)
     if not ok:
         return result
 
