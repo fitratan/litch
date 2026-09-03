@@ -17,6 +17,30 @@ class ZTEGM220Adapter(ZTEBaseAdapter):
         super().__init__(ip, port, timeout)
         self.detected_model = "ZTE GM220-S (XPON ONT)"
 
+    def get_wifi_info(self) -> Dict[str, Any]:
+        """Fetch Wi-Fi SSIDs and security keys for GM220."""
+        for page in ["net_wlan_secrity_t.gch", "net_wlan_essid_t.gch", "wlan_security_basic_t.gch", "net_wlan_basic_t.gch"]:
+            try:
+                r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                if r.status_code == 200 and "login_t.gch" not in r.text and len(r.text) > 1000:
+                    tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
+                    clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
+                    ssid = clean_tms.get("ESSID", clean_tms.get("ESSID0", clean_tms.get("Frm_ESSID", "")))
+                    pwd = clean_tms.get("KeyPassphrase", clean_tms.get("KeyPassphrase0", clean_tms.get("Frm_KeyPassphrase", "")))
+                    bssid = clean_tms.get("Bssid", clean_tms.get("AssociatedDeviceMACAddress", ""))
+                    channel = clean_tms.get("Channel", clean_tms.get("ChannelInUsed", ""))
+                    if ssid:
+                        return {
+                            "ssid": ssid,
+                            "password": pwd or "N/A",
+                            "bssid": bssid or "N/A",
+                            "channel": channel or "N/A",
+                            "enabled": True
+                        }
+            except Exception:
+                continue
+        return super().get_wifi_info()
+
     def configure_wan(self, wan_config: Dict[str, Any]) -> Tuple[bool, str]:
         mode = wan_config.get("mode", "PPPoE")
         vlan = str(wan_config.get("vlan_id", "")).strip()

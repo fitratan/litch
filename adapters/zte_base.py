@@ -7,9 +7,14 @@ from typing import Dict, Any, Tuple, Optional, List
 from adapters.base import BaseONTAdapter
 
 def decode_hex(s: str) -> str:
-    """Helper to decode hex-encoded strings from ZTE Transfer_meaning tags."""
+    """Helper to decode hex-encoded strings and C-style escape sequences from ZTE Transfer_meaning tags."""
     if not s or not isinstance(s, str):
         return ""
+    if r"\x" in s:
+        try:
+            s = re.sub(r'\\x([0-9a-fA-F]{2})', lambda m: chr(int(m.group(1), 16)).replace('\\', r'\\'), s)
+        except Exception:
+            pass
     if s.startswith("&#x") or s.startswith("&amp;#x"):
         clean = s.replace("&amp;#x", "").replace("&#x", "").rstrip(";")
         try:
@@ -30,7 +35,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
     """
     Base ZTE ONT Adapter providing shared infrastructure:
     - Session management & Token extraction
-    - Challenge-response authentication (SHA256, MD5, Plaintext)
+    - Challenge-response authentication (SHA256, MD5, GM220 Plaintext token)
     - Hex parameter decoding / encoding
     - Optical power telemetry & System reboot
     - WAN / WLAN / LAN configuration & Password changing
@@ -39,6 +44,8 @@ class ZTEBaseAdapter(BaseONTAdapter):
 
     def __init__(self, ip: str, port: int = 80, timeout: int = 3):
         super().__init__(ip, port, timeout)
+        self.session = self.create_http_session()
+        self.base_url = f"http://{self.ip}:{self.port}"
         self.session_token = ""
         self.detected_model = ""
 
@@ -59,6 +66,10 @@ class ZTEBaseAdapter(BaseONTAdapter):
     def _extract_token_from_html(self, text: str) -> str:
         if not text:
             return ""
+        m = re.search(r'getObj\([\"\x27]Frm_Logintoken[\"\x27]\)\.value\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]', text, re.I)
+        if m:
+            return m.group(1)
+
         m = re.search(r'id=["\x27]Frm_Logintoken["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', text, re.I)
         if not m:
             m = re.search(r'name=["\x27]Frm_Logintoken["\x27]\s+value=["\x27]([^"\x27]+)["\x27]', text, re.I)
@@ -105,17 +116,32 @@ class ZTEBaseAdapter(BaseONTAdapter):
         sha256_token = hashlib.sha256((clean_pwd + token).encode("utf-8")).hexdigest() if token else clean_pwd
 
         payloads = [
+            # 1. GM220-S & Universal Plaintext + FormToken
+            {
+                "action": "login",
+                "Username": username,
+                "Password": clean_pwd,
+                "username": username,
+                "password": clean_pwd,
+                "Frm_Username": username,
+                "Frm_Password": clean_pwd,
+                "Frm_Logintoken": token or "40",
+                "frashnum": "",
+                "login": "Login",
+            },
+            # 2. SHA256 + Token (F670, F663)
             {"Username": username, "Password": sha256_token, "Frm_Logintoken": token, "action": "login", "login": "Login"},
+            # 3. MD5 + Token (Classic F609, F660, F477)
             {"Username": username, "Password": md5_token, "Frm_Logintoken": token, "action": "login", "login": "Login"},
+            # 4. Pure MD5
             {"Username": username, "Password": md5_pure, "Frm_Logintoken": token, "action": "login"},
-            {"Username": username, "Password": clean_pwd, "Frm_Logintoken": token, "action": "login"},
         ]
 
         target_urls = [
+            f"{self.base_url}/",
             f"{self.base_url}/getpage.gch?pid=1002&nextpage=login_t.gch",
             f"{self.base_url}/getpage.gch?pid=1001",
             f"{self.base_url}/login.gch",
-            f"{self.base_url}/",
         ]
 
         for post_url in target_urls:
@@ -136,8 +162,8 @@ class ZTEBaseAdapter(BaseONTAdapter):
                         return True, f"Login sukses via Web GUI ({username})"
 
                     if r.status_code == 200 and "login_t.gch" not in res_text and len(r.text) > 300:
-                        r_test = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage=status_t.gch", timeout=2)
-                        if r_test.status_code == 200 and "login_t.gch" not in r_test.text.lower():
+                        r_test = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch", timeout=2)
+                        if r_test.status_code == 200 and "login_t.gch" not in r_test.text.lower() and len(r_test.text) > 1000:
                             self.authenticated_user = username
                             self.authenticated_password = password
                             return True, f"Login sukses via Web GUI ({username})"
@@ -151,13 +177,41 @@ class ZTEBaseAdapter(BaseONTAdapter):
         for page in ["net_ethwan_conf_t.gch", "net_gponwan_conf_t.gch", "net_wan_conf_t.gch", "net_tr069wan_conf_t.gch"]:
             try:
                 r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
-                if r.status_code == 200 and "login_t.gch" not in r.text:
+                if r.status_code == 200 and "login_t.gch" not in r.text and len(r.text) > 1000:
                     tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
                     clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
-                    user = clean_tms.get("UserName0", clean_tms.get("UserName1", clean_tms.get("Frm_UserName", "")))
-                    vlan = clean_tms.get("VLANID0", clean_tms.get("VLANID1", clean_tms.get("Frm_VLANID", "")))
-                    mode = clean_tms.get("TransType0", clean_tms.get("TransType1", clean_tms.get("Frm_mode", "PPPoE")))
-                    ip_addr = clean_tms.get("IPAddr0", clean_tms.get("IPAddr1", ""))
+
+                    st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r.text)
+                    st = st_m.group(1) if st_m else self.session_token
+
+                    # If specific WAN fields aren't present directly, query available profiles
+                    wan_matches = re.findall(r"Transfer_meaning\([\"\x27]IF_WANNAME(\d+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text)
+                    for idx_str, raw_name in wan_matches:
+                        d_name = decode_hex(raw_name).strip()
+                        if any(k in d_name.upper() for k in ["INTERNET", "PPPOE", "PPP", "ROUTE", "DATA", "HSI", "R_VID"]):
+                            # Query details for this profile
+                            try:
+                                link_post = {
+                                    "_SESSION_TOKEN": st,
+                                    "IF_ACTION": "wanctype",
+                                    "IF_INDEX": str(idx_str),
+                                    "IF_NAME": d_name,
+                                    "IF_MULTIDISPLAY": "0",
+                                    "IF_TYPE": "PPPoE",
+                                    "IF_PROTOCOL": "",
+                                }
+                                r_l = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=link_post, timeout=2.5)
+                                tms_l = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r_l.text))
+                                for k, v in tms_l.items():
+                                    if v != "NULL":
+                                        clean_tms[k] = decode_hex(v)
+                            except Exception:
+                                pass
+
+                    user = clean_tms.get("UserName1", clean_tms.get("UserName0", clean_tms.get("UserName2", clean_tms.get("Frm_UserName", ""))))
+                    vlan = clean_tms.get("VLANID1", clean_tms.get("VLANID0", clean_tms.get("VLANID2", clean_tms.get("Frm_VLANID", ""))))
+                    mode = clean_tms.get("TransType1", clean_tms.get("TransType0", clean_tms.get("TransType2", clean_tms.get("Frm_mode", "PPPoE"))))
+                    ip_addr = clean_tms.get("IPAddress1", clean_tms.get("IPAddress0", clean_tms.get("IPAddr0", "")))
                     return {
                         "username": user or "N/A",
                         "vlan_id": vlan or "N/A",
@@ -252,7 +306,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
         for page in ["net_wlan_basic_t.gch", "wlan_security_basic_t.gch", "net_wlan_conf_t.gch"]:
             try:
                 r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
-                if r.status_code == 200 and "login_t.gch" not in r.text:
+                if r.status_code == 200 and "login_t.gch" not in r.text and len(r.text) > 1000:
                     tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
                     clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
                     ssid = clean_tms.get("ESSID0", clean_tms.get("ESSID1", clean_tms.get("Frm_ESSID", "")))
@@ -346,7 +400,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
         for page in ["pon_status_t.gch", "pon_optical_info_t.gch", "net_gpon_status_t.gch", "status_pon_info_t.gch"]:
             try:
                 r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
-                if r.status_code == 200 and "login_t.gch" not in r.text:
+                if r.status_code == 200 and "login_t.gch" not in r.text and len(r.text) > 1000:
                     tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
                     rx = decode_hex(tms.get("RxPower", tms.get("rx_power", "")))
                     tx = decode_hex(tms.get("TxPower", tms.get("tx_power", "")))
@@ -360,6 +414,27 @@ class ZTEBaseAdapter(BaseONTAdapter):
             except Exception:
                 continue
         return {"rx_power_dbm": "N/A", "tx_power_dbm": "N/A", "temperature": "N/A", "status": "N/A"}
+
+    def lock_anti_reset(self, lock_config: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+        try:
+            r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage=manager_dev_config_t.gch", timeout=3)
+            st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r.text)
+            st = st_m.group(1) if st_m else self.session_token
+
+            payload = {
+                "_SESSION_TOKEN": st,
+                "IF_ACTION": "save",
+                "IF_MULTIDISPLAY": "0",
+            }
+            self.session.post(
+                f"{self.base_url}/getpage.gch?pid=1002&nextpage=manager_dev_config_t.gch",
+                data=payload,
+                headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage=manager_dev_config_t.gch"},
+                timeout=4
+            )
+            return True, "Konfigurasi disimpan permanen ke Flash Storage (Web Commit)"
+        except Exception:
+            return False, "Gagal mengunci konfigurasi"
 
     def burn_config_to_rom(self) -> Tuple[bool, str]:
         return self.lock_anti_reset()

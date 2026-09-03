@@ -14,6 +14,8 @@ class BaseONTAdapter(abc.ABC):
         self.ip = ip
         self.port = port
         self.timeout = timeout
+        self.session = self.create_http_session()
+        self.base_url = f"http://{self.ip}:{self.port}"
         self.session_cookie: Optional[str] = None
         self.authenticated_user: Optional[str] = None
         self.authenticated_password: Optional[str] = None

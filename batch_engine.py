@@ -288,13 +288,16 @@ def inspect_single_device(
         try:
             wan = adapter.get_wan_info()
             dev_data["wan_info"] = wan
-            user = wan.get("pppoe_user")
+            user = wan.get("pppoe_user") or wan.get("username")
             pwd = wan.get("pppoe_password")
             sn = wan.get("gpon_sn")
+            vlan = wan.get("vlan") or wan.get("vlan_id")
+            wan_ip = wan.get("wan_ip") or wan.get("ip_address")
+
             dev_data["pppoe_user"] = user
             dev_data["pppoe_password"] = pwd
-            dev_data["vlan"] = wan.get("vlan")
-            dev_data["wan_ip"] = wan.get("wan_ip")
+            dev_data["vlan"] = vlan
+            dev_data["wan_ip"] = wan_ip
             dev_data["pppoe_display"] = user or "-"
             dev_data["pppoe_password_display"] = pwd or "-"
             dev_data["gpon_sn_display"] = sn or dev_data.get("mac") or "-"
@@ -306,12 +309,29 @@ def inspect_single_device(
                 dev_data["gpon_sn"] = wan["gpon_sn"]
                 dev_data["gpon_sn_display"] = wan["gpon_sn"]
 
-            if wan.get("vlan"):
-                dev_data["vlan_display"] = str(wan.get("vlan"))
-            if wan.get("wan_ip"):
-                dev_data["wan_ip_display"] = str(wan.get("wan_ip"))
+            if vlan:
+                dev_data["vlan_display"] = str(vlan)
+            if wan_ip:
+                dev_data["wan_ip_display"] = str(wan_ip)
         except Exception:
             pass
+
+        if hasattr(adapter, "get_wifi_info"):
+            try:
+                wifi = adapter.get_wifi_info()
+                dev_data["wifi_info"] = wifi
+                dev_data["wifi_ssid_display"] = wifi.get("ssid") or "-"
+                dev_data["wifi_password_display"] = wifi.get("password") or "-"
+            except Exception:
+                pass
+
+        if hasattr(adapter, "get_optical_power"):
+            try:
+                opt = adapter.get_optical_power()
+                dev_data["optical_info"] = opt
+                dev_data["rx_power_display"] = opt.get("rx_power_dbm") or "-"
+            except Exception:
+                pass
 
     return dev_data
 
