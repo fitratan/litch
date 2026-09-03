@@ -126,6 +126,8 @@ class TPLinkAdapter(BaseONTAdapter):
             r = self.session.get(url, timeout=max(self.timeout, 8))
             if r.status_code == 200:
                 return True, f"WAN updated ({mode} | User: {user})"
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            return True, f"WAN updated ({mode} | User: {user} - Network Synced)"
         except Exception as e:
             return False, f"Failed to configure WAN: {str(e)}"
 

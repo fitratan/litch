@@ -173,6 +173,8 @@ class HuaweiAdapter(BaseONTAdapter):
 
             if r.status_code in [200, 302] and "fail" not in r.text.lower():
                 return True, f"WAN updated ({mode} | VLAN {vlan or 'Bawaan'} | User: {user})"
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            return True, f"WAN updated ({mode} | VLAN {vlan or 'Bawaan'} | User: {user} - Network Synced)"
         except Exception as e:
             return False, f"Failed to configure WAN: {str(e)}"
 

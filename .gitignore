@@ -11,4 +11,7 @@ output/
 *.csv
 *.json
 *.zip
+*.jpg
+*.jpeg
+*.png
 !requirements.txt

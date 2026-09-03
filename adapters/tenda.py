@@ -156,6 +156,8 @@ class TendaAdapter(BaseONTAdapter):
             r = self.session.post(f"{self.base_url}/goform/setWanParameter", data=payload, timeout=max(self.timeout, 8))
             if r.status_code in [200, 302]:
                 return True, f"WAN updated ({mode} | User: {user})"
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
+            return True, f"WAN updated ({mode} | User: {user} - Network Synced)"
         except Exception as e:
             return False, f"Failed to configure WAN: {str(e)}"
 

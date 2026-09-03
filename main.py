@@ -60,6 +60,15 @@ def get_term_width() -> int:
 def is_mobile_term() -> bool:
     return get_term_width() < 95
 
+RIMURU_ASCII = r"""
+        .---.            _    ___ _____ ___ _  _ 
+       /     \          | |  |_ _|_   _/ __| || |
+      | () () |         | |   | |  | || (__| __ |
+     / \  _  / \        |____|___| |_| \___|_||_|
+    / / `---' \ \   
+   /_/  |_____|  \_\    === [ DEMON LORD EDITION ] ===
+"""
+
 def print_banner():
     w = min(max(get_term_width() - 2, 35), 70)
     border = "+" + "=" * (w - 2) + "+"
@@ -68,6 +77,7 @@ def print_banner():
         title = "LITCH - BATCH & SEC"
     padding = max(0, (w - 2 - len(title)) // 2)
     line = "|" + " " * padding + title + " " * (w - 2 - len(title) - padding) + "|"
+    console.print(f"[bold cyan]{RIMURU_ASCII}[/bold cyan]")
     console.print(f"[bold cyan]{border}\n{line}\n{border}[/bold cyan]")
 
 def print_subnet_choices(detected_subnets):
@@ -1213,4 +1223,8 @@ def main():
         print("\a", end="", flush=True)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        console.print("\n\n[bold yellow][!] Program dihentikan. Sampai jumpa, bos! 👋[/bold yellow]\n")
+        sys.exit(0)

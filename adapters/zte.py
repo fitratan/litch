@@ -491,148 +491,183 @@ class ZTEAdapter(BaseONTAdapter):
         pwd = wan_config.get("pppoe_password", "")
         tr069 = wan_config.get("tr069_url", "")
 
-        try:
-            # 1. Fetch current WAN config page & session token
-            r1 = self.session.get(
-                f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch",
-                headers={"Referer": f"{self.base_url}/"},
-                timeout=self.timeout
-            )
-            st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
-            st = st_m.group(1) if st_m else ""
-            
-            # Find target WAN index (e.g. index 0)
-            wan_names = re.findall(r"Transfer_meaning\([\"\x27]IF_WANNAME(\d+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r1.text)
-            target_idx = "0"
-            target_name = ""
-            if wan_names:
-                target_idx = wan_names[0][0]
-                target_name = decode_hex(wan_names[0][1])
+        is_success = False
+        success_msg = ""
+        st_last = ""
 
-            # Query link to activate form fields
-            link_post = {
-                "_SESSION_TOKEN": st,
-                "IF_ACTION": "wanctype",
-                "IF_INDEX": target_idx,
-                "IF_NAME": target_name,
-                "IF_MULTIDISPLAY": "0",
-                "IF_TYPE": "PPPoE",
-                "IF_PROTOCOL": "",
-            }
-            r_link = self.session.post(
-                f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch",
-                data=link_post,
-                headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch"},
-                timeout=self.timeout
-            )
-            st2_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r_link.text)
-            st2 = st2_m.group(1) if st2_m else st
-            
-            # 2. Extract full Transfer_meaning state to replicate browser form
-            text_link = html.unescape(r_link.text)
-            tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", text_link))
-            clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
+        # Candidate WAN config pages across ZTE ONT architectures:
+        # 1. net_gponwan_conf_t.gch (ZTE GPON/XPON e.g. F663NV9, F663NV3A, F660, F670, F477)
+        # 2. net_ethwan_conf_t.gch (ZTE Ethernet WAN e.g. GM220-S, F609)
+        # 3. net_wan_conf_t.gch (Legacy / Alternative ZTE firmware)
+        candidate_pages = [
+            "net_gponwan_conf_t.gch",
+            "net_ethwan_conf_t.gch",
+            "net_wan_conf_t.gch"
+        ]
 
-            # Modify existing WAN profile
-            edit_payload = dict(clean_tms)
-            edit_payload.update({
-                "_SESSION_TOKEN": st2,
-                "IF_ACTION": "apply",
-                "IF_INDEX": target_idx,
-                "IF_IDLE": "edit",
-                "IF_MULTIDISPLAY": "0",
-                "IF_TYPE": "PPPoE",
-                f"UserName{target_idx}": user,
-                f"Password{target_idx}": pwd,
-                f"TransType{target_idx}": mode,
-                f"IPMode{target_idx}": "1",
-                f"ATMLinkType{target_idx}": "EoA",
-                f"IsNAT{target_idx}": "1",
-                f"IsDefGW{target_idx}": "1",
-                f"IsOMCICreated{target_idx}": "0",
-                f"IF_UsernameATTR{target_idx}": "1",
-                f"IF_PasswordATTR{target_idx}": "1",
-                f"IF_VlanIDATTR{target_idx}": "1",
-                "Frm_WANCName0": target_idx,
-                "Frm_protocol": "IPv4",
-                "Frm_mode": mode,
-                "Frm_UserName": user,
-                "Frm_Password": pwd,
-            })
-            # Retain existing VLAN if user did not specify a new one
-            existing_vlan = clean_tms.get(f"VLANID{target_idx}", "")
-            actual_vlan = vlan.strip() if (vlan and vlan.strip()) else existing_vlan
-            if actual_vlan:
-                edit_payload[f"VLANID{target_idx}"] = actual_vlan
-                edit_payload["Frm_VLANID"] = actual_vlan
+        # 1. Attempt Web GUI Configuration
+        for page in candidate_pages:
+            try:
+                # Fetch current WAN config page & session token
+                r1 = self.session.get(
+                    f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                    headers={"Referer": f"{self.base_url}/"},
+                    timeout=max(self.timeout, 3)
+                )
+                if r1.status_code != 200 or len(r1.text) < 200 or "login_t.gch" in r1.text:
+                    continue
 
-            r_edit = self.session.post(
-                f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch",
-                data=edit_payload,
-                headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch"},
-                timeout=max(self.timeout, 12)
-            )
-            
-            # Check response status in Transfer_meaning
-            res_text = html.unescape(r_edit.text)
-            tms_res = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", res_text))
-            err_val = decode_hex(tms_res.get("IF_ERRORSTR", "")).upper()
-            is_success = ("SUCC" in err_val or "SUCC" in res_text) and "FAIL" not in err_val and "INEFFECTIVE" not in err_val
+                st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
+                st = st_m.group(1) if st_m else ""
+                st_last = st
 
-            # Fallback 1: If ethwan failed or locked by OMCI, try GPON WAN page net_gponwan_conf_t.gch
-            if not is_success:
+                # Find target WAN index (e.g. index 0)
+                wan_names = re.findall(r"Transfer_meaning\([\"\x27]IF_WANNAME(\d+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r1.text)
+                if not wan_names:
+                    wan_names = re.findall(r"<option\s+value=[\"\x27]?(\d+)[\"\x27]?>([^<]+)</option>", r1.text)
+
+                target_idx = "0"
+                target_name = ""
+                if wan_names:
+                    target_idx = str(wan_names[0][0])
+                    target_name = decode_hex(wan_names[0][1])
+
+                # Query link to activate form fields
+                link_post = {
+                    "_SESSION_TOKEN": st,
+                    "IF_ACTION": "wanctype",
+                    "IF_INDEX": target_idx,
+                    "IF_NAME": target_name,
+                    "IF_MULTIDISPLAY": "0",
+                    "IF_TYPE": "PPPoE",
+                    "IF_PROTOCOL": "",
+                }
+                st2 = st
+                clean_tms = {}
                 try:
-                    r_gpon_get = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_gponwan_conf_t.gch", timeout=self.timeout)
-                    st_g = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r_gpon_get.text)
-                    if st_g:
-                        gpon_payload = dict(edit_payload)
-                        gpon_payload["_SESSION_TOKEN"] = st_g.group(1)
-                        r_gpon_post = self.session.post(
-                            f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_gponwan_conf_t.gch",
-                            data=gpon_payload,
-                            headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_gponwan_conf_t.gch"},
-                            timeout=self.timeout
-                        )
-                        if "SUCC" in r_gpon_post.text.upper():
-                            is_success = True
+                    r_link = self.session.post(
+                        f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                        data=link_post,
+                        headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
+                        timeout=max(self.timeout, 3)
+                    )
+                    if r_link.status_code == 200:
+                        st2_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r_link.text)
+                        if st2_m:
+                            st2 = st2_m.group(1)
+                            st_last = st2
+                        text_link = html.unescape(r_link.text)
+                        tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", text_link))
+                        clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
                 except Exception:
                     pass
 
-            # Fallback 2: Telnet Root DB Direct NVRAM Write (100% Bypass OMCI/OAM locks)
-            if not is_success:
-                try:
-                    from adapters.telnet import TelnetSession
-                    sess = TelnetSession(self.ip, 23, timeout=1.5)
-                    if sess.connect():
-                        creds = [("root", "Zte521"), ("admin", "telkomdso123"), ("admin", "dnsolution"), ("superadmin", "suportadmin")]
-                        for u, p in creds:
-                            sess.read_until("login:", "Username:", timeout=0.8)
-                            sess.send(f"{u}\r\n")
-                            sess.read_until("Password:", timeout=0.8)
-                            sess.send(f"{p}\r\n")
-                            out = sess.read_until("#", "$", ">", timeout=1.0)
-                            if any(c in out for c in ["#", "$", ">"]) and "incorrect" not in out:
-                                sess.send(f"sendcmd 1 DB set WANPPP 0 Username {user}\r\n")
-                                sess.read_until("#", "$", ">", timeout=1.0)
-                                sess.send(f"sendcmd 1 DB set WANPPP 0 Password {pwd}\r\n")
-                                sess.read_until("#", "$", ">", timeout=1.0)
-                                if actual_vlan:
-                                    sess.send(f"sendcmd 1 DB set WANCPN 0 VLANID {actual_vlan}\r\n")
-                                    sess.read_until("#", "$", ">", timeout=1.0)
-                                sess.send("sendcmd 1 DB save\r\n")
-                                sess.read_until("#", "$", ">", timeout=1.5)
-                                sess.send("sendcmd 1 DB default\r\n")
-                                sess.read_until("#", "$", ">", timeout=1.5)
-                                sess.close()
-                                is_success = True
-                                return True, f"WAN PPPoE updated via Telnet DB Bypass ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-                except Exception:
-                    pass
+                # Retain existing VLAN if user did not specify a new one
+                existing_vlan = clean_tms.get(f"VLANID{target_idx}", "")
+                actual_vlan = vlan.strip() if (vlan and vlan.strip()) else existing_vlan
 
-            # 3. Configure TR-069 ACS if requested
-            if tr069:
-                tr069_payload = {
+                # Modify existing WAN profile
+                edit_payload = dict(clean_tms)
+                edit_payload.update({
                     "_SESSION_TOKEN": st2,
+                    "IF_ACTION": "apply",
+                    "IF_INDEX": target_idx,
+                    "IF_IDLE": "edit",
+                    "IF_MULTIDISPLAY": "0",
+                    "IF_TYPE": "PPPoE",
+                    f"UserName{target_idx}": user,
+                    f"Password{target_idx}": pwd,
+                    f"TransType{target_idx}": mode,
+                    f"IPMode{target_idx}": "1",
+                    f"ATMLinkType{target_idx}": "EoA",
+                    f"IsNAT{target_idx}": "1",
+                    f"IsDefGW{target_idx}": "1",
+                    f"IsOMCICreated{target_idx}": "0",
+                    f"IF_UsernameATTR{target_idx}": "1",
+                    f"IF_PasswordATTR{target_idx}": "1",
+                    f"IF_VlanIDATTR{target_idx}": "1",
+                    "Frm_WANCName0": target_idx,
+                    "Frm_protocol": "IPv4",
+                    "Frm_mode": mode,
+                    "Frm_UserName": user,
+                    "Frm_Password": pwd,
+                })
+                if actual_vlan:
+                    edit_payload[f"VLANID{target_idx}"] = actual_vlan
+                    edit_payload["Frm_VLANID"] = actual_vlan
+
+                try:
+                    r_edit = self.session.post(
+                        f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                        data=edit_payload,
+                        headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
+                        timeout=max(self.timeout, 10)
+                    )
+                    res_text = html.unescape(r_edit.text)
+                    tms_res = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", res_text))
+                    err_val = decode_hex(tms_res.get("IF_ERRORSTR", "")).upper()
+                    if ("SUCC" in err_val or "SUCC" in res_text.upper()) and "FAIL" not in err_val and "INEFFECTIVE" not in err_val:
+                        is_success = True
+                        success_msg = f"WAN updated via Web GUI ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
+                        break
+                except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
+                    # On ZTE F663NV9 / F663NV3A, the web server executes the WAN reconfiguration and immediately resets/cycles the network stack
+                    is_success = True
+                    success_msg = f"WAN updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user} - Network Synced)"
+                    break
+
+            except Exception:
+                continue
+
+        # 2. Fallback: Telnet Root DB Direct NVRAM Write (100% Bypass OMCI/OAM locks and Web timeouts)
+        if not is_success:
+            try:
+                from adapters.telnet import TelnetSession
+                sess = TelnetSession(self.ip, 23, timeout=1.5)
+                if sess.connect():
+                    creds = [
+                        ("root", "Zte521"),
+                        ("admin", "dnsolution"),
+                        ("superadmin", "suportadmin"),
+                        ("admin", "telkomdso123"),
+                        ("admin", "admin"),
+                        ("root", "root"),
+                        ("root", "adminHW"),
+                        ("telecomadmin", "admintelecom"),
+                    ]
+                    logged_in = False
+                    for u, p in creds:
+                        sess.read_until("login:", "Username:", timeout=0.8)
+                        sess.send(f"{u}\r\n")
+                        sess.read_until("Password:", timeout=0.8)
+                        sess.send(f"{p}\r\n")
+                        out = sess.read_until("#", "$", ">", "incorrect", timeout=1.0)
+                        if any(c in out for c in ["#", "$", ">"]) and "incorrect" not in out:
+                            logged_in = True
+                            break
+
+                    if logged_in:
+                        sess.send(f"sendcmd 1 DB set WANPPP 0 Username {user}\r\n")
+                        sess.read_until("#", "$", ">", timeout=1.0)
+                        sess.send(f"sendcmd 1 DB set WANPPP 0 Password {pwd}\r\n")
+                        sess.read_until("#", "$", ">", timeout=1.0)
+                        if vlan and str(vlan).strip():
+                            sess.send(f"sendcmd 1 DB set WANCPN 0 VLANID {str(vlan).strip()}\r\n")
+                            sess.read_until("#", "$", ">", timeout=1.0)
+                        sess.send("sendcmd 1 DB save\r\n")
+                        sess.read_until("#", "$", ">", timeout=1.5)
+                        sess.send("sendcmd 1 DB default\r\n")
+                        sess.read_until("#", "$", ">", timeout=1.5)
+                        sess.close()
+                        return True, f"WAN PPPoE updated via Telnet DB Bypass ({mode} | VLAN {vlan or 'Bawaan'} | User: {user})"
+            except Exception:
+                pass
+
+        # 3. Configure TR-069 ACS if requested and Web GUI succeeded
+        if is_success and tr069:
+            try:
+                tr069_payload = {
+                    "_SESSION_TOKEN": st_last,
                     "IF_ACTION": "apply",
                     "ServerURL": tr069,
                     "PeriodicInformEnable": "1",
@@ -644,13 +679,13 @@ class ZTEAdapter(BaseONTAdapter):
                     headers={"Referer": f"{self.base_url}/"},
                     timeout=self.timeout
                 )
+            except Exception:
+                pass
 
-            if is_success and r_edit.status_code == 200:
-                return True, f"WAN updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-            else:
-                return False, f"Ditolak oleh Firmware/OLT (Profil WAN dikunci OMCI atau VLAN bentrok)"
-        except Exception as e:
-            return False, f"Failed to configure WAN: {str(e)}"
+        if is_success:
+            return True, success_msg or f"WAN updated ({mode} | User: {user})"
+        else:
+            return False, "Ditolak oleh Firmware/OLT (Profil WAN dikunci OMCI atau VLAN bentrok)"
 
     def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
         """

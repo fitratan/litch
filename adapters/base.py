@@ -19,18 +19,26 @@ class BaseONTAdapter(abc.ABC):
         self.authenticated_password: Optional[str] = None
 
     def create_http_session(self) -> requests.Session:
+        from urllib3.util import Retry
         session = requests.Session()
+        retry_strategy = Retry(
+            total=3,
+            connect=3,
+            read=2,
+            status=0,
+            backoff_factor=0.15,
+            raise_on_status=False
+        )
         adapter = HTTPAdapter(
             pool_connections=100,
             pool_maxsize=100,
-            max_retries=0
+            max_retries=retry_strategy
         )
         session.mount("http://", adapter)
         session.mount("https://", adapter)
         session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Connection": "keep-alive",
         })
         return session
 
