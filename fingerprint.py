@@ -85,7 +85,13 @@ def detect_device_fingerprint(
     - Server header analysis (Mini web server, GoAhead-Webs, Boa/0.94, etc.)
     - Telnet banner analysis if port 23 is open
     """
-    from adapters.zte import ZTEAdapter
+    from adapters.zte import (
+        ZTEAdapter,
+        ZTEGM220Adapter,
+        ZTEF663Adapter,
+        ZTEF609Adapter,
+        ZTEF670Adapter,
+    )
     from adapters.huawei import HuaweiAdapter
     from adapters.realtek_boa import RealtekBoAAdapter
     from adapters.vsol import VSOLAdapter
@@ -152,26 +158,35 @@ def detect_device_fingerprint(
         or "frm_logintoken" in r_text
         or "zfc_" in r_text
         or "mini web server" in r_server
-        or any(k in combined for k in ["zte", "zxic", "gm220", "f609", "f670", "f677", "zx-f677", "f660", "f477", "f470", "zxhn", "c0d0ff"])
+        or any(k in combined for k in ["zte", "zxic", "gm220", "f609", "f670", "f677", "zx-f677", "f660", "f663", "f477", "f470", "zxhn", "c0d0ff"])
     ):
         model_name = "ZTE GPON/XPON ONT"
-        if "f677" in combined or "zx-f677" in combined or "zxic" in combined:
-            model_name = "ZTE / ZXIC ZX-F677V2 GPON ONT"
-        elif "gm220" in combined:
+        driver_name = "ZTEGM220Adapter"
+        driver_cls = ZTEGM220Adapter
+
+        if "gm220" in combined:
             model_name = "ZTE GM220-S GPON ONT"
-        elif "f670" in combined:
-            model_name = "ZTE ZXHN F670L Dualband"
-        elif "f609" in combined:
+            driver_name = "ZTEGM220Adapter"
+            driver_cls = ZTEGM220Adapter
+        elif "f663" in combined:
+            model_name = "ZTE ZXHN F663 (XPON/GPON ONT)"
+            driver_name = "ZTEF663Adapter"
+            driver_cls = ZTEF663Adapter
+        elif "f609" in combined or "f660" in combined or "f620" in combined:
             model_name = "ZTE ZXHN F609 GPON ONT"
-        elif "f477" in combined or "f470" in combined:
-            model_name = "ZTE ZXHN F477/F470 EPON/XPON"
+            driver_name = "ZTEF609Adapter"
+            driver_cls = ZTEF609Adapter
+        elif "f670" in combined or "f672" in combined or "f677" in combined or "f477" in combined or "f470" in combined:
+            model_name = "ZTE ZXHN F670L Dualband"
+            driver_name = "ZTEF670Adapter"
+            driver_cls = ZTEF670Adapter
 
         return FingerprintResult(
             ip=ip,
             vendor=VendorEnum.ZTE,
             model=model_name,
-            driver_name="ZTEAdapter",
-            adapter_class=ZTEAdapter,
+            driver_name=driver_name,
+            adapter_class=driver_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,

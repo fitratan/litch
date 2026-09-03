@@ -6,7 +6,13 @@ import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 
-from adapters.zte import ZTEAdapter
+from adapters.zte import (
+    ZTEAdapter,
+    ZTEGM220Adapter,
+    ZTEF663Adapter,
+    ZTEF609Adapter,
+    ZTEF670Adapter,
+)
 from adapters.huawei import HuaweiAdapter
 from adapters.fiberhome import FiberhomeAdapter
 from adapters.vsol import VSOLAdapter
@@ -17,6 +23,10 @@ from adapters.generic import GenericAdapter
 from adapters.telnet import TelnetAdapter
 
 ADAPTERS = [
+    ZTEGM220Adapter,
+    ZTEF663Adapter,
+    ZTEF609Adapter,
+    ZTEF670Adapter,
     ZTEAdapter,
     HuaweiAdapter,
     FiberhomeAdapter,
