@@ -1,0 +1,14 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.class
+
+# Environment & credentials cache
+.cache_creds.json
+.auth_security.json
+.scan_checkpoint.json
+output/
+*.csv
+*.json
+*.zip
+!requirements.txt
