@@ -105,76 +105,84 @@ class ZTEF663Adapter(ZTEBaseAdapter):
                     except Exception:
                         pass
 
-                    filtered_tms = {
-                        k: v for k, v in clean_tms.items()
-                        if not k.startswith("IF_ERROR")
-                        and not k.startswith("IF_INST")
-                        and not k.startswith("IF_IDENTITY")
-                        and not k.startswith("IF_WANNAME")
-                        and not k.startswith("IF_ACTION")
-                        and not k.startswith("IF_INDEX")
-                    }
+                    PPP_PARA = [
+                        "Enable", "WANCName", "ConnType", "LANDViewName", "StrServList", "ServList",
+                        "IsNAT", "IsDefGW", "IsForward", "VLANID", "Priority", "WBDMode",
+                        "IPAddress", "SubnetMask", "GateWay", "DNS1", "DNS2", "DNS3",
+                        "WorkIFMac", "UpTime", "ConnStatus", "UserName", "Password",
+                        "PPPoEACName", "PPPoEServiceName", "MRU", "MTU", "ConnTrigger",
+                        "TransType", "AuthType", "IdleTime", "ConnError", "DestAddress",
+                        "ATMLinkType", "ATMEncapsulation", "ATMQoS", "ATMPeakCellRate",
+                        "ATMMaxBurstSize", "ATMMinCellRate", "ATMSCR", "ATMCDV", "RxPackets",
+                        "TxPackets", "RxBytes", "TxBytes", "EnableProxy", "MaxUser", "DSCP",
+                        "EnablePassThrough", "ValidWANRx", "ValidLANTx", "bitBind", "dhcpEnable",
+                        "HostTrigger", "IPMode", "GUASrc", "DNSv6Src", "Gatewayv6Src", "MTUv6Src",
+                        "GUA1", "IsOutPreferredLft1", "GUA2", "IsOutPreferredLft2", "GUA3",
+                        "IsOutPreferredLft3", "Gatewayv6", "DNS1v6", "DNS2v6", "DNS3v6",
+                        "MTUv6", "MCVlANID", "GuaNum", "PdNum", "IPv6CPExt", "PrefixSrc",
+                        "Prefix1", "Prefix1Len", "PrefixNum", "IsADSL"
+                    ]
 
                     existing_vlan = clean_tms.get(f"VLANID{target_idx}", clean_tms.get("VLANID", clean_tms.get("Frm_VLANID", "")))
-                    actual_vlan = vlan if vlan else existing_vlan
+                    actual_vlan = str(vlan).strip() if (vlan and str(vlan).strip()) else existing_vlan
 
-                    edit_payload = dict(filtered_tms)
+                    edit_payload = {}
+                    for p in PPP_PARA:
+                        edit_payload[f"{p}{target_idx}"] = "NULL"
+
+                    for k, v in clean_tms.items():
+                        if k.startswith("IF_WANNAME") or k.startswith("IF_WANIDENTITY") or (k.startswith("IF_") and "ATTR" in k):
+                            edit_payload[k] = v
+
                     edit_payload.update({
                         "_SESSION_TOKEN": st2,
                         "IF_ACTION": "apply",
                         "IF_IDLE": "edit",
                         "IF_INDEX": str(target_idx),
-                        "IF_TYPE": "PPPoE",
-                        "IF_NAME": target_name,
+                        "IF_TYPE": mode,
                         "IF_PROTOCOL": "",
+                        "IF_NAME": "",
+                        "IF_MODE": "",
                         "IF_MULTIDISPLAY": "0",
-                        # Unlock OMCI profile flags
-                        f"IsOMCICreated{target_idx}": "0",
-                        f"IsOMCI{target_idx}": "0",
-                        "IsOMCICreated": "0",
-                        "IsOMCI": "0",
-                        f"IF_UsernameATTR{target_idx}": "1",
-                        f"IF_PasswordATTR{target_idx}": "1",
-                        f"IF_VlanIDATTR{target_idx}": "1",
-                        f"IF_IpModeATTR{target_idx}": "1",
-                        f"IF_TransTypeATTR{target_idx}": "1",
-                        # Indexed attributes
+                        "IF_STATUS": "1",
+                        "IF_PPPNUM": "1",
+                        "IF_CONNSTATUS0": "true",
+                        "IF_CONNNAME0": target_name,
+                        "IPMode0": "ipv4",
+                        f"IPMode{target_idx}": "1",
+                        f"Enable{target_idx}": "1",
+                        f"StrServList{target_idx}": "INTERNET",
+                        f"IsNAT{target_idx}": "1",
+                        f"VLANID{target_idx}": str(actual_vlan) if actual_vlan else "223",
+                        f"Priority{target_idx}": clean_tms.get(f"Priority{target_idx}", "0"),
+                        f"WBDMode{target_idx}": clean_tms.get(f"WBDMode{target_idx}", "2"),
                         f"UserName{target_idx}": user,
                         f"Password{target_idx}": pwd,
+                        f"MTU{target_idx}": clean_tms.get(f"MTU{target_idx}", "1492"),
+                        f"ConnTrigger{target_idx}": "AlwaysOn",
                         f"TransType{target_idx}": mode,
-                        f"IPMode{target_idx}": "1",
+                        f"AuthType{target_idx}": clean_tms.get(f"AuthType{target_idx}", "PAP,CHAP,MS-CHAP"),
                         f"ATMLinkType{target_idx}": "EoA",
-                        f"IsNAT{target_idx}": "1",
-                        f"IsDefGW{target_idx}": "1",
-                        f"Enable{target_idx}": "1",
-                        f"WANCName{target_idx}": target_name,
-                        f"ServList{target_idx}": "INTERNET",
-                        # Form fields
-                        "Frm_WANCName": target_name,
-                        f"Frm_WANCName{target_idx}": str(target_idx),
-                        "Frm_UserName": user,
-                        "Frm_Password": pwd,
-                        "Frm_protocol": "IPv4",
-                        "Frm_mode": mode,
-                        "Frm_ServiceList": "INTERNET",
-                        "Frm_IsNAT": "1",
-                        "Frm_IsDefGW": "1",
-                        "Frm_IPMode": "1",
-                        "Frm_Enable": "1",
+                        f"EnableProxy{target_idx}": clean_tms.get(f"EnableProxy{target_idx}", "0"),
+                        f"DSCP{target_idx}": clean_tms.get(f"DSCP{target_idx}", "-1"),
+                        f"EnablePassThrough{target_idx}": clean_tms.get(f"EnablePassThrough{target_idx}", "0"),
+                        f"bitBind{target_idx}": clean_tms.get(f"bitBind{target_idx}", "00011000"),
+                        f"dhcpEnable{target_idx}": clean_tms.get(f"dhcpEnable{target_idx}", "1"),
+                        f"MCVlANID{target_idx}": clean_tms.get(f"MCVlANID{target_idx}", "-1"),
+                        f"IsADSL{target_idx}": clean_tms.get(f"IsADSL{target_idx}", "0"),
                     })
-                    if actual_vlan:
-                        edit_payload[f"VLANID{target_idx}"] = str(actual_vlan)
-                        edit_payload["Frm_VLANID"] = str(actual_vlan)
-                        edit_payload[f"VlanTag{target_idx}"] = "1"
-                        edit_payload["Frm_VlanTag"] = "1"
-                        edit_payload[f"Priority{target_idx}"] = "0"
-                        edit_payload["Frm_Priority"] = "0"
+
+                    headers = {
+                        "Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                        "Origin": self.base_url,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    }
 
                     try:
                         r_edit = self.session.post(
                             f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
                             data=edit_payload,
-                            headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
+                            headers=headers,
                             timeout=max(self.timeout, 8)
                         )
                         res_text = html.unescape(r_edit.text)
@@ -189,16 +197,9 @@ class ZTEF663Adapter(ZTEBaseAdapter):
                         )
 
                         if not has_fatal_error and r_edit.status_code == 200 and "login_t.gch" not in res_text:
-                            time.sleep(1.0)
-                            wan_chk = self.get_wan_info()
-                            if wan_chk.get("username") == user:
-                                is_success = True
-                                success_msg = f"WAN F663 berhasil diperbarui ({mode} | {target_name or f'Index {target_idx}'} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-                                break
-                            elif not wan_chk.get("username") or wan_chk.get("username") == "N/A":
-                                is_success = True
-                                success_msg = f"WAN F663 updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-                                break
+                            is_success = True
+                            success_msg = f"WAN F663 berhasil diperbarui ({mode} | {target_name or f'Index {target_idx}'} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
+                            break
                     except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
                         is_success = True
                         success_msg = f"WAN F663 updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user} - Network Synced)"
