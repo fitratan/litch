@@ -226,29 +226,77 @@ class ZTEBaseAdapter(BaseONTAdapter):
     def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
         """Update web administration password."""
         clean_pwd = new_password.strip()
-        for page in ["manager_user_conf_t.gch", "sec_user_t.gch", "user_conf_t.gch"]:
+        candidate_pages = ["manager_aduser_conf_t.gch", "manager_user_conf_t.gch", "sec_user_t.gch", "user_conf_t.gch"]
+        for page in candidate_pages:
             try:
                 r1 = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                if r1.status_code != 200 or len(r1.text) < 500 or "login_t.gch" in r1.text:
+                    continue
+
                 st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
                 st = st_m.group(1) if st_m else self.session_token
 
+                idx = "0" if username == "admin" else "1"
                 payload = {
                     "_SESSION_TOKEN": st,
                     "IF_ACTION": "apply",
                     "IF_IDLE": "edit",
-                    "IF_INDEX": "0",
+                    "IF_INDEX": idx,
                     "Username": username,
                     "Password": clean_pwd,
                     "OldPassword": self.authenticated_password or "admin",
                     "Frm_Username": username,
                     "Frm_Password": clean_pwd,
+                    "Frm_CfmPassword": clean_pwd,
                     "Frm_OldPassword": self.authenticated_password or "admin",
+                    "Type": "1",
+                    "Enable": "1",
+                    "Right": "1" if username == "admin" else "2",
                 }
-                r_post = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=payload, timeout=4)
+                r_post = self.session.post(
+                    f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                    data=payload,
+                    headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
+                    timeout=4
+                )
                 if r_post.status_code == 200 and "error" not in r_post.text.lower():
-                    return True, f"Password {username} berhasil diubah"
+                    self.authenticated_password = clean_pwd
+                    return True, f"Password {username} berhasil diubah ke '{clean_pwd}'"
             except Exception:
                 continue
+
+        # Telnet Root DB Fallback for Password Change
+        try:
+            from adapters.telnet import TelnetSession
+            sess = TelnetSession(self.ip, 23, timeout=2.0)
+            if sess.connect():
+                creds = [("root", "Zte521"), ("admin", "dnsolution"), ("superadmin", "suportadmin"), ("admin", "admin"), ("root", "root")]
+                logged_in = False
+                for u, p in creds:
+                    sess.read_until("login:", "Username:", timeout=0.8)
+                    sess.send(f"{u}\r\n")
+                    sess.read_until("Password:", timeout=0.8)
+                    sess.send(f"{p}\r\n")
+                    out = sess.read_until("#", "$", ">", "incorrect", timeout=1.0)
+                    if any(c in out for c in ["#", "$", ">"]) and "incorrect" not in out:
+                        logged_in = True
+                        break
+
+                if logged_in:
+                    sess.send(f"sendcmd 1 DB set DevAuthInfo 0 User {username}\r\n")
+                    sess.read_until("#", "$", ">", timeout=0.5)
+                    sess.send(f"sendcmd 1 DB set DevAuthInfo 0 Pass {clean_pwd}\r\n")
+                    sess.read_until("#", "$", ">", timeout=0.5)
+                    sess.send("sendcmd 1 DB save\r\n")
+                    sess.read_until("#", "$", ">", timeout=1.0)
+                    sess.send("sendcmd 1 DB default\r\n")
+                    sess.read_until("#", "$", ">", timeout=1.0)
+                    sess.close()
+                    self.authenticated_password = clean_pwd
+                    return True, f"Password {username} berhasil diubah ke '{clean_pwd}' via Telnet DB"
+        except Exception:
+            pass
+
         return False, "Gagal mengubah password ONT ZTE"
 
     def configure_lan_ports(self, lan_config: Dict[str, Any]) -> Tuple[bool, str]:

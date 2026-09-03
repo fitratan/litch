@@ -569,6 +569,23 @@ def process_single_ont_anti_reset(
     result["username_used"] = user_used
     result["password_used"] = pass_used
 
+    pwd_changed_msg = ""
+    if lock_config.get("set_new_password") and lock_config.get("new_password"):
+        target_u = lock_config.get("target_username") or user_used or "admin"
+        new_p = lock_config.get("new_password")
+        try:
+            pwd_ok, pwd_msg = adapter.change_password(new_p, username=target_u)
+            if pwd_ok:
+                result["password_used"] = new_p
+                pwd_changed_msg = f"Password {target_u} diubah"
+                save_cached_credential(ip, target_u, new_p)
+                if device.get("mac"):
+                    save_cached_credential(device["mac"], target_u, new_p)
+            else:
+                pwd_changed_msg = f"Gagal ganti pwd ({pwd_msg})"
+        except Exception as e:
+            pwd_changed_msg = f"Err pwd ({str(e)})"
+
     if hasattr(adapter, "lock_anti_reset"):
         lock_ok, lock_msg = adapter.lock_anti_reset(lock_config)
     elif hasattr(adapter, "burn_config_to_rom"):
@@ -581,7 +598,10 @@ def process_single_ont_anti_reset(
         lock_msg = "Adapter tidak mendukung fitur Anti-Reset"
 
     result["anti_reset_locked"] = lock_ok
-    result["message"] = lock_msg
+    if pwd_changed_msg:
+        result["message"] = f"{pwd_changed_msg} & {lock_msg}"
+    else:
+        result["message"] = lock_msg
     return result
 
 def run_batch_anti_reset(
