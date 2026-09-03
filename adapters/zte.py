@@ -591,18 +591,27 @@ class ZTEAdapter(BaseONTAdapter):
                     except Exception:
                         pass
 
+                    # Filter out read-only metadata and status variables from clean_tms
+                    filtered_tms = {
+                        k: v for k, v in clean_tms.items()
+                        if not k.startswith("IF_ERROR")
+                        and not k.startswith("IF_INST")
+                        and not k.startswith("IF_IDENTITY")
+                        and not k.startswith("IF_WANNAME")
+                        and not k.startswith("IF_ACTION")
+                        and not k.startswith("IF_INDEX")
+                    }
+
                     # Retain existing VLAN if user did not specify a new one
                     existing_vlan = clean_tms.get(f"VLANID{target_idx}", clean_tms.get("VLANID", clean_tms.get("Frm_VLANID", "")))
                     actual_vlan = vlan.strip() if (vlan and vlan.strip()) else existing_vlan
 
                     # Modify WAN profile with complete multi-generation parameter map
-                    edit_payload = dict(clean_tms)
+                    edit_payload = dict(filtered_tms)
                     edit_payload.update({
                         "_SESSION_TOKEN": st2,
                         "IF_ACTION": "apply",
                         "IF_INDEX": str(target_idx),
-                        "IF_IDLE": "edit",
-                        "IF_MULTIDISPLAY": "0",
                         "IF_TYPE": "PPPoE",
                         "IF_NAME": target_name,
                         "IF_PROTOCOL": "",
@@ -615,7 +624,6 @@ class ZTEAdapter(BaseONTAdapter):
                         f"IsNAT{target_idx}": "1",
                         f"IsDefGW{target_idx}": "1",
                         f"Enable{target_idx}": "1",
-                        f"IsOMCICreated{target_idx}": "0",
                         f"WANCName{target_idx}": target_name,
                         f"ServList{target_idx}": "INTERNET",
                         f"IF_UsernameATTR{target_idx}": "1",
@@ -650,14 +658,24 @@ class ZTEAdapter(BaseONTAdapter):
                         )
                         res_text = html.unescape(r_edit.text)
                         tms_res = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", res_text))
-                        err_val = decode_hex(tms_res.get("IF_ERRORSTR", "")).upper()
-                        if ("SUCC" in err_val or "SUCC" in res_text.upper() or "APPLIED" in res_text.upper()) and not any(k in err_val for k in ["FAIL", "ERROR", "INVALID", "INEFFECTIVE", "OMCI"]):
+                        raw_err = tms_res.get("IF_ERRORSTR", "")
+                        err_val = decode_hex(raw_err).strip().upper()
+
+                        is_no_error = (
+                            err_val in ["", "NULL", "0", "SUCC", "SUCCESS", "NONE"]
+                            or "SUCC" in err_val
+                            or "SUCC" in res_text.upper()
+                            or "APPLIED" in res_text.upper()
+                        )
+                        has_fatal_error = any(k in err_val for k in ["FAIL", "ERROR", "INVALID", "E_PARAM", "EXCEED", "CONFLICT", "LOCKED"])
+
+                        if is_no_error and not has_fatal_error and r_edit.status_code == 200 and "login_t.gch" not in res_text:
                             is_success = True
                             success_msg = f"WAN updated via Web GUI ({mode} | {target_name or f'Index {target_idx}'} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
                             break
-                        elif r_edit.status_code == 200 and not err_val and len(res_text) > 1000 and "login_t.gch" not in res_text:
+                        elif r_edit.status_code in [200, 302] and not has_fatal_error and len(res_text) > 500 and "login_t.gch" not in res_text:
                             is_success = True
-                            success_msg = f"WAN updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
+                            success_msg = f"WAN updated via Web GUI ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
                             break
                     except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
                         # On ZTE F663NV9 / F663NV3A / GM220-S, the web server executes the WAN reconfiguration and immediately resets/cycles the network stack
@@ -715,8 +733,15 @@ class ZTEAdapter(BaseONTAdapter):
                         )
                         res_new = html.unescape(r_new.text)
                         tms_new = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", res_new))
-                        err_new = decode_hex(tms_new.get("IF_ERRORSTR", "")).upper()
-                        if ("SUCC" in err_new or "SUCC" in res_new.upper()) and "FAIL" not in err_new:
+                        raw_err_new = tms_new.get("IF_ERRORSTR", "")
+                        err_new = decode_hex(raw_err_new).strip().upper()
+                        is_no_err_new = (
+                            err_new in ["", "NULL", "0", "SUCC", "SUCCESS", "NONE"]
+                            or "SUCC" in err_new
+                            or "SUCC" in res_new.upper()
+                        )
+                        has_fatal_new = any(k in err_new for k in ["FAIL", "ERROR", "INVALID", "E_PARAM", "EXCEED", "CONFLICT", "LOCKED"])
+                        if is_no_err_new and not has_fatal_new and r_new.status_code == 200 and "login_t.gch" not in res_new:
                             is_success = True
                             success_msg = f"New WAN profile created via Web GUI ({mode} | VLAN {actual_vlan or 'None'} | User: {user})"
                             break
@@ -810,7 +835,7 @@ class ZTEAdapter(BaseONTAdapter):
         if is_success:
             return True, success_msg or f"WAN updated ({mode} | User: {user})"
         else:
-            return False, "Ditolak oleh Firmware/OLT (Profil WAN dikunci OMCI atau VLAN bentrok)"
+            return False, "Gagal simpan konfigurasi WAN via Web GUI (Parameter ditolak firmware atau profil dikunci)"
 
     def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
         """
