@@ -167,7 +167,7 @@ def load_custom_passwords(file_path: str = DEFAULT_PASSWORDS_FILE) -> List[Tuple
 def save_custom_passwords(creds: List[Tuple[str, str]], file_path: str = DEFAULT_PASSWORDS_FILE):
     try:
         with open(file_path, "w", encoding="utf-8") as f:
-            f.write("# Daftar Password Kredensial ONT Modem NODERA\n")
+            f.write("# Daftar Password Kredensial ONT Modem LITCH\n")
             f.write("# Format: username:password atau password saja\n")
             for u, p in creds:
                 f.write(f"{u}:{p}\n")

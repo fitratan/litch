@@ -11,7 +11,7 @@ from rich.prompt import Prompt
 console = Console(emoji=False)
 
 AUTH_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".auth_security.json")
-SECRET_SALT = b"NODERA_NET_SEC_CORE_v2026_@ANTIGRAV"
+SECRET_SALT = b"LITCH_NET_SEC_CORE_v2026_@ANTIGRAV"
 
 def _hash_credential(text: str, salt: bytes) -> str:
     """Hash text using PBKDF2-HMAC-SHA256 with 200,000 iterations."""
@@ -34,7 +34,6 @@ def is_auth_initialized() -> bool:
             salt_hex = data.get("salt")
             sig = data.get("signature")
             if u_hash and p_hash and salt_hex and sig:
-                # Verify HMAC signature
                 expected_sig = _calculate_signature(u_hash, p_hash, salt_hex)
                 return hmac.compare_digest(sig, expected_sig)
     except Exception:
@@ -44,7 +43,7 @@ def is_auth_initialized() -> bool:
 def setup_initial_credentials() -> bool:
     """Interactive first-time owner credential setup."""
     console.print(Panel(
-        "[bold yellow]AKTIVASI KEAMANAN PERDANA — NODERA NETWORK ENGINE[/bold yellow]\n\n"
+        "[bold yellow]AKTIVASI KEAMANAN PERDANA - LITCH NETWORK ENGINE[/bold yellow]\n\n"
         "[white]Belum ada kredensial pemilik terdaftar.\n"
         "Silakan tentukan [bold green]Username[/bold green] dan [bold green]Password[/bold green] Master Anda.\n"
         "[bold red]Kredensial ini akan dienkripsi dengan PBKDF2-SHA256 (200.000 iterasi) dan tidak dapat diubah oleh orang lain tanpa password lama![/bold red][/white]",
@@ -109,7 +108,6 @@ def verify_credentials(username_input: str, password_input: str) -> bool:
             salt_hex = data.get("salt")
             sig = data.get("signature")
 
-            # Check file tampering
             expected_sig = _calculate_signature(u_hash, p_hash, salt_hex)
             if not hmac.compare_digest(sig, expected_sig):
                 console.print("[bold red][CRITICAL] File keamanan telah dimodifikasi secara ilegal / rusak![/bold red]")
@@ -134,19 +132,19 @@ def require_authentication() -> bool:
 
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
-        console.print(f"\n[bold yellow]🔐 OTENTIKASI KEAMANAN NODERA (Percobaan {attempt}/{max_attempts})[/bold yellow]")
+        console.print(f"\n[bold yellow]OTENTIKASI KEAMANAN LITCH (Percobaan {attempt}/{max_attempts})[/bold yellow]")
         user = Prompt.ask("   [bold white]Username Master[/bold white]").strip()
         pwd = Prompt.ask("   [bold white]Password Master[/bold white]", password=True).strip()
 
         if verify_credentials(user, pwd):
-            console.print("[bold green][✓] Otentikasi Berhasil! Selamat datang.[/bold green]\n")
+            console.print("[bold green][OK] Otentikasi Berhasil! Selamat datang.[/bold green]\n")
             time.sleep(0.3)
             console.clear()
             return True
         else:
             remaining = max_attempts - attempt
             if remaining > 0:
-                console.print(f"   [bold red][✗] Username atau Password salah! (Sisa {remaining}x percobaan)[/bold red]")
+                console.print(f"   [bold red][FAIL] Username atau Password salah! (Sisa {remaining}x percobaan)[/bold red]")
                 time.sleep(1.0)
             else:
                 console.print("\n[bold red][ALERT] Akses Ditolak: Melebihi batas maksimal percobaan login![/bold red]")
@@ -162,10 +160,10 @@ def change_master_credentials() -> bool:
     old_pwd = Prompt.ask("   [bold white]Masukkan Password Master Saat Ini[/bold white]", password=True).strip()
 
     if not verify_credentials(old_user, old_pwd):
-        console.print("[bold red][✗] Password lama salah! Perubahan kredensial ditolak.[/bold red]")
+        console.print("[bold red][FAIL] Password lama salah! Perubahan kredensial ditolak.[/bold red]")
         return False
 
-    console.print("[bold green][✓] Verifikasi password lama berhasil.[/bold green]")
+    console.print("[bold green][OK] Verifikasi password lama berhasil.[/bold green]")
     new_user = Prompt.ask("   [bold cyan]Masukkan Username Master Baru[/bold cyan]").strip()
     if len(new_user) < 3:
         console.print("[red]Username minimal 3 karakter.[/red]")

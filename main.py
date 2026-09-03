@@ -63,9 +63,9 @@ def is_mobile_term() -> bool:
 def print_banner():
     w = min(max(get_term_width() - 2, 35), 70)
     border = "+" + "=" * (w - 2) + "+"
-    title = "NODERA - NETWORK BATCH & SECURITY"
+    title = "LITCH - NETWORK BATCH & SECURITY"
     if len(title) > w - 4:
-        title = "NODERA - BATCH & SEC"
+        title = "LITCH - BATCH & SEC"
     padding = max(0, (w - 2 - len(title)) // 2)
     line = "|" + " " * padding + title + " " * (w - 2 - len(title) - padding) + "|"
     console.print(f"[bold cyan]{border}\n{line}\n{border}[/bold cyan]")
@@ -853,12 +853,12 @@ def run_interactive():
             # Multi-SSID / Wi-Fi Configuration
             console.print("\n[bold yellow]Parameter Konfigurasi Wi-Fi Multi-SSID Massal:[/bold yellow]")
             ssid_idx = Prompt.ask("   Index SSID", choices=["1", "2", "3", "4"], default="1")
-            ssid_name = Prompt.ask("   Nama SSID (Wi-Fi Name)", default=f"NODERA_WIFI_{{ip_last}}")
+            ssid_name = Prompt.ask("   Nama SSID (Wi-Fi Name)", default=f"LITCH_WIFI_{{ip_last}}")
             auth_mode = Prompt.ask("   Tipe Enkripsi / Keamanan", choices=["WPA2-PSK", "WPA/WPA2-PSK", "Open"], default="WPA2-PSK")
             
             wlan_pwd = ""
             if auth_mode != "Open":
-                wlan_pwd = Prompt.ask("   Password Wi-Fi", default="nodera12345")
+                wlan_pwd = Prompt.ask("   Password Wi-Fi", default="litch12345")
 
             hide_ssid = Confirm.ask("   Sembunyikan SSID (Hide SSID)?", default=False)
             enable_wlan = Confirm.ask(f"   Aktifkan SSID{ssid_idx} ini?", default=True)
