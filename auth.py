@@ -140,6 +140,8 @@ def require_authentication() -> bool:
 
         if verify_credentials(user, pwd):
             console.print("[bold green][✓] Otentikasi Berhasil! Selamat datang.[/bold green]\n")
+            time.sleep(0.3)
+            console.clear()
             return True
         else:
             remaining = max_attempts - attempt
