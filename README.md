@@ -9,10 +9,10 @@
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
-### 1. 🛡️ Penetration Testing & Vulnerability Auditing
-- **Default Factory Credential Auditing**: Automated detection of default ISP & factory accounts (SuperAdmin, Admin, User).
+### 1. Penetration Testing & Vulnerability Auditing
+- **Default Factory Credential Auditing**: Automated detection of default ISP and factory accounts (SuperAdmin, Admin, User).
 - **Cleartext Root Telnet Backdoor Detection**: Flags active root shells (`root:Zte521`, `root:adminHW`, `root:admin`, etc.).
 - **Open Recursive DNS Resolver Test**: Identifies devices vulnerable to participating in DNS amplification DDoS attacks.
 - **SNMP Public Community Probe**: Scans for information disclosure via default SNMP `public` strings.
@@ -20,36 +20,36 @@
 - **Automated Risk Scoring**: Categorizes each host into `CRITICAL`, `HIGH`, `MEDIUM`, `LOW`, or `SECURE`.
 - **Comprehensive Reports**: Exports audit results into timestamped CSV and JSON files.
 
-### 2. 🚨 Rogue DHCP Server Detection
+### 2. Rogue DHCP Server Detection
 - Broadcasts Layer-2 `DHCP Discover` packets (`255.255.255.255:67`) to locate unauthorized DHCP servers that cause IP conflicts and disconnect client networks.
 
-### 3. ⚡ High-Speed Network Discovery
+### 3. High-Speed Network Discovery
 - Ultra-fast multi-threaded socket probe (up to 100+ concurrent workers) capable of scanning `/24` subnets in seconds.
 - Multi-protocol fallback (Web HTTP/HTTPS, Telnet CLI, TR-069) with automatic MAC OUI vendor resolution.
 
-### 4. ⚙️ Batch WAN Provisioning & OMCI Lock Bypass
+### 4. Batch WAN Provisioning & OMCI Lock Bypass
 - Switch WAN modes across hundreds of ONTs simultaneously (**PPPoE**, **IPoE/DHCP**, **Bridge**).
 - Mass **VLAN ID** configuration.
-- Dynamic PPPoE username & password injection with `{ip_last}` pattern support (e.g., `user_{ip_last}`).
+- Dynamic PPPoE username and password injection with `{ip_last}` pattern support (e.g., `user_{ip_last}`).
 - **TR-069 ACS URL** auto-configuration (e.g., GenieACS).
 - **Multi-Layer OMCI / OAM Lock Bypass**: Overrides read-only kernel flags (`IsOMCICreated=0`, writeable attribute injection, and direct NVRAM DB write) on OLT-locked ZTE ONTs.
 
-### 5. 📶 Dual-Band & Multi-SSID Wi-Fi Management
+### 5. Dual-Band & Multi-SSID Wi-Fi Management
 - Configure primary and secondary SSIDs, security protocols (WPA/WPA2-PSK), and passwords.
 - Dual-band support for 2.4 GHz and 5 GHz networks (e.g., ZTE ZXHN F672Y).
 
-### 6. 🔒 Permanent Anti-Reset Hardening
+### 6. Permanent Anti-Reset Hardening
 - **ROM Default Burn**: Commits active configurations to permanent Flash NVRAM so factory resets restore ISP settings.
 - **Hardware Button Deactivation**: Remotely disables physical push-button reset listeners on supported OpenWrt, Tenda, and TP-Link devices.
 
-### 7. 🔐 Master Authentication Guard
+### 7. Master Authentication Guard
 - Protected by **PBKDF2-HMAC-SHA256 (200,000 iterations)** cryptographic hashing.
 - Digital **HMAC anti-tamper signature** preventing unauthorized file modifications.
 - Rate-limited login barrier (maximum 3 attempts) before CLI tools can be opened.
 
 ---
 
-## 📡 Supported Vendors & Hardware
+## Supported Vendors & Hardware
 
 | Vendor | Models / Series | Supported Protocols |
 | :--- | :--- | :--- |
@@ -63,7 +63,7 @@
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Prerequisites
 - Python 3.8 or higher
@@ -81,7 +81,7 @@ pip install -r requirements.txt
 
 ---
 
-## 💻 Usage
+## Usage
 
 ### 1. Interactive Wizard Mode (Recommended)
 Launch the interactive terminal interface:
@@ -137,12 +137,12 @@ python3 main.py --rogue-dhcp
 
 ---
 
-## 🔒 Security & Privacy Notice
+## Security & Privacy Notice
 - All network interactions, credential verifications, and audit actions execute entirely locally within your network.
 - No telemetry, analytics, or external credentials are ever sent over third-party connections.
 - Sensitive files (`.auth_security.json`, `.cache_creds.json`, CSV reports) are automatically excluded via `.gitignore`.
 
 ---
 
-## 📄 License
+## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
