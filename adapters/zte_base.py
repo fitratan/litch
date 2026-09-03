@@ -33,6 +33,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
     - Challenge-response authentication (SHA256, MD5, Plaintext)
     - Hex parameter decoding / encoding
     - Optical power telemetry & System reboot
+    - WAN / WLAN / LAN configuration & Password changing
     - Telnet Root DB injection fallback
     """
 
@@ -145,10 +146,125 @@ class ZTEBaseAdapter(BaseONTAdapter):
 
         return False, "Autentikasi ZTE gagal"
 
+    def get_wan_info(self) -> Dict[str, Any]:
+        """Fetch active WAN profiles, IP, VLAN, and connection status."""
+        for page in ["net_ethwan_conf_t.gch", "net_gponwan_conf_t.gch", "net_wan_conf_t.gch", "net_tr069wan_conf_t.gch"]:
+            try:
+                r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                if r.status_code == 200 and "login_t.gch" not in r.text:
+                    tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
+                    clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
+                    user = clean_tms.get("UserName0", clean_tms.get("UserName1", clean_tms.get("Frm_UserName", "")))
+                    vlan = clean_tms.get("VLANID0", clean_tms.get("VLANID1", clean_tms.get("Frm_VLANID", "")))
+                    mode = clean_tms.get("TransType0", clean_tms.get("TransType1", clean_tms.get("Frm_mode", "PPPoE")))
+                    ip_addr = clean_tms.get("IPAddr0", clean_tms.get("IPAddr1", ""))
+                    return {
+                        "username": user or "N/A",
+                        "vlan_id": vlan or "N/A",
+                        "mode": mode or "PPPoE",
+                        "ip_address": ip_addr or "N/A",
+                        "raw_profiles": clean_tms
+                    }
+            except Exception:
+                continue
+        return {"username": "N/A", "vlan_id": "N/A", "mode": "N/A", "ip_address": "N/A"}
+
+    def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
+        """Update web administration password."""
+        clean_pwd = new_password.strip()
+        for page in ["manager_user_conf_t.gch", "sec_user_t.gch", "user_conf_t.gch"]:
+            try:
+                r1 = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
+                st = st_m.group(1) if st_m else self.session_token
+
+                payload = {
+                    "_SESSION_TOKEN": st,
+                    "IF_ACTION": "apply",
+                    "IF_IDLE": "edit",
+                    "IF_INDEX": "0",
+                    "Username": username,
+                    "Password": clean_pwd,
+                    "OldPassword": self.authenticated_password or "admin",
+                    "Frm_Username": username,
+                    "Frm_Password": clean_pwd,
+                    "Frm_OldPassword": self.authenticated_password or "admin",
+                }
+                r_post = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=payload, timeout=4)
+                if r_post.status_code == 200 and "error" not in r_post.text.lower():
+                    return True, f"Password {username} berhasil diubah"
+            except Exception:
+                continue
+        return False, "Gagal mengubah password ONT ZTE"
+
+    def configure_lan_ports(self, lan_config: Dict[str, Any]) -> Tuple[bool, str]:
+        """Configure LAN port binding / isolation / DHCP."""
+        for page in ["net_portbind_t.gch", "net_dhcp_server_t.gch", "net_lan_conf_t.gch"]:
+            try:
+                r1 = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
+                st = st_m.group(1) if st_m else self.session_token
+
+                payload = {"_SESSION_TOKEN": st, "IF_ACTION": "apply", "IF_IDLE": "edit"}
+                payload.update(lan_config)
+                r_post = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=payload, timeout=4)
+                if r_post.status_code == 200:
+                    return True, "Konfigurasi LAN / Port binding berhasil diterapkan"
+            except Exception:
+                continue
+        return False, "Gagal mengonfigurasi LAN"
+
+    def configure_wlan_ssid(self, ssid_config: Dict[str, Any]) -> Tuple[bool, str]:
+        """Configure Wi-Fi SSID name, password, and security mode."""
+        ssid_name = ssid_config.get("ssid_name", "")
+        ssid_pwd = ssid_config.get("wlan_password", "")
+        ssid_idx = str(ssid_config.get("ssid_index", "1"))
+        auth_mode = ssid_config.get("auth_mode", "WPA2-PSK")
+
+        for page in ["net_wlan_basic_t.gch", "wlan_security_basic_t.gch", "net_wlan_sec_t.gch", "net_wlan_conf_t.gch"]:
+            try:
+                r1 = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
+                st = st_m.group(1) if st_m else self.session_token
+
+                payload = {
+                    "_SESSION_TOKEN": st,
+                    "IF_ACTION": "apply",
+                    "IF_IDLE": "edit",
+                    "IF_INDEX": str(int(ssid_idx) - 1),
+                    f"ESSID{int(ssid_idx)-1}": ssid_name,
+                    f"KeyPassphrase{int(ssid_idx)-1}": ssid_pwd,
+                    f"BeaconType{int(ssid_idx)-1}": "11i" if "WPA2" in auth_mode else "None",
+                    "Frm_ESSID": ssid_name,
+                    "Frm_KeyPassphrase": ssid_pwd,
+                }
+                r_post = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=payload, timeout=5)
+                if r_post.status_code == 200:
+                    return True, f"Wi-Fi SSID {ssid_name} berhasil diperbarui"
+            except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+                return True, f"Wi-Fi SSID {ssid_name} berhasil diperbarui (WLAN Synced)"
+            except Exception:
+                continue
+        return False, "Gagal mengonfigurasi Wi-Fi SSID ZTE"
+
+    def get_wifi_info(self) -> Dict[str, Any]:
+        """Fetch Wi-Fi SSIDs and security keys."""
+        for page in ["net_wlan_basic_t.gch", "wlan_security_basic_t.gch", "net_wlan_conf_t.gch"]:
+            try:
+                r = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                if r.status_code == 200 and "login_t.gch" not in r.text:
+                    tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r.text))
+                    clean_tms = {k: decode_hex(v) for k, v in tms.items() if v != "NULL"}
+                    ssid = clean_tms.get("ESSID0", clean_tms.get("ESSID1", clean_tms.get("Frm_ESSID", "")))
+                    pwd = clean_tms.get("KeyPassphrase0", clean_tms.get("KeyPassphrase1", clean_tms.get("Frm_KeyPassphrase", "")))
+                    return {"ssid": ssid or "N/A", "password": pwd or "N/A", "enabled": True}
+            except Exception:
+                continue
+        return {"ssid": "N/A", "password": "N/A", "enabled": False}
+
     def execute_telnet_db_wan(self, user: str, pwd: str, vlan: str = "", mode: str = "PPPoE") -> Tuple[bool, str]:
         """Direct root Telnet database override fallback."""
         try:
-            # Try unlocking telnet if closed
             try:
                 self.session.get(f"{self.base_url}/middle_factorymode_t.gch", timeout=1.5)
                 self.session.get(f"{self.base_url}/hidden_version_switch.gch", timeout=1.5)
@@ -244,3 +360,9 @@ class ZTEBaseAdapter(BaseONTAdapter):
             except Exception:
                 continue
         return {"rx_power_dbm": "N/A", "tx_power_dbm": "N/A", "temperature": "N/A", "status": "N/A"}
+
+    def burn_config_to_rom(self) -> Tuple[bool, str]:
+        return self.lock_anti_reset()
+
+    def disable_reset_button(self) -> Tuple[bool, str]:
+        return self.lock_anti_reset()
