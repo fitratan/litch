@@ -13,11 +13,31 @@ from adapters.zte import (
     ZTEF609Adapter,
     ZTEF670Adapter,
 )
-from adapters.huawei import HuaweiAdapter
-from adapters.fiberhome import FiberhomeAdapter
-from adapters.vsol import VSOLAdapter
-from adapters.tenda import TendaAdapter
-from adapters.tplink import TPLinkAdapter
+from adapters.huawei import (
+    HuaweiAdapter,
+    HuaweiHG8245Adapter,
+    HuaweiEG8145Adapter,
+)
+from adapters.fiberhome import (
+    FiberhomeAdapter,
+    FiberhomeAN5506Adapter,
+    FiberhomeHG680Adapter,
+)
+from adapters.vsol import (
+    VSOLAdapter,
+    VSOLV2801Adapter,
+    VSOLV2802Adapter,
+)
+from adapters.tenda import (
+    TendaAdapter,
+    TendaN301Adapter,
+    TendaHG9Adapter,
+)
+from adapters.tplink import (
+    TPLinkAdapter,
+    TPLinkWR840NAdapter,
+    TPLinkXC220Adapter,
+)
 from adapters.mikrotik import MikrotikAdapter
 from adapters.generic import GenericAdapter
 from adapters.telnet import TelnetAdapter
@@ -27,6 +47,16 @@ ADAPTERS = [
     ZTEF663Adapter,
     ZTEF609Adapter,
     ZTEF670Adapter,
+    HuaweiHG8245Adapter,
+    HuaweiEG8145Adapter,
+    FiberhomeAN5506Adapter,
+    FiberhomeHG680Adapter,
+    VSOLV2801Adapter,
+    VSOLV2802Adapter,
+    TendaN301Adapter,
+    TendaHG9Adapter,
+    TPLinkWR840NAdapter,
+    TPLinkXC220Adapter,
     ZTEAdapter,
     HuaweiAdapter,
     FiberhomeAdapter,

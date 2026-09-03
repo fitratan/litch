@@ -109,10 +109,12 @@ def detect_device_fingerprint(
     )
     from adapters.tplink import (
         TPLinkAdapter,
+        TPLinkWR840NAdapter,
         TPLinkXC220Adapter,
     )
     from adapters.tenda import (
         TendaAdapter,
+        TendaN301Adapter,
         TendaHG9Adapter,
     )
     from adapters.realtek_boa import RealtekBoAAdapter
@@ -328,13 +330,19 @@ def detect_device_fingerprint(
         "reasyui" in r_text
         or "b28n.js" in r_text
         or "goform/gethomepageinfo" in r_text
-        or any(k in combined for k in ["tenda wireless router", "tenda technology", "tenda", "n301", "f3", "ac10", "hg9", "hg6", "hg3"])
+        or any(k in combined for k in ["tenda wireless router", "tenda technology", "tenda", "n301", "f3", "f6", "ac10", "hg9", "hg6", "hg3"])
     ):
-        model_name = "Tenda Router Wi-Fi / AP"
-        ad_cls = TendaAdapter
-        if any(k in combined for k in ["hg9", "hg6", "hg3"]):
+        model_name = "Tenda N301/F3 Wireless Router"
+        ad_cls = TendaN301Adapter
+        if any(k in combined for k in ["hg9", "hg6", "hg3", "gpon", "ont"]):
             model_name = "Tenda HG9 Dualband GPON ONT"
             ad_cls = TendaHG9Adapter
+        elif "f3" in combined or "f6" in combined:
+            model_name = "Tenda F3/F6 Wireless Router"
+            ad_cls = TendaN301Adapter
+        elif "n301" in combined:
+            model_name = "Tenda N301 Wireless Router"
+            ad_cls = TendaN301Adapter
 
         return FingerprintResult(
             ip=ip,
@@ -354,13 +362,22 @@ def detect_device_fingerprint(
     if (
         "userrpm" in r_text
         or "userrpm" in r_url
-        or any(k in combined for k in ["tp-link", "tplink", "wr840", "wr844", "wr841", "archer", "xc220", "tx-6610"])
+        or any(k in combined for k in ["tp-link", "tplink", "wr840", "wr844", "wr841", "wr940", "archer", "xc220", "tx-6610"])
     ):
-        model_name = "TP-Link Router Wi-Fi / AP"
-        ad_cls = TPLinkAdapter
-        if "xc220" in combined or "tx-6610" in combined:
+        model_name = "TP-Link TL-WR840N/WR841N Router"
+        ad_cls = TPLinkWR840NAdapter
+        if "xc220" in combined or "tx-6610" in combined or "gpon" in combined:
             model_name = "TP-Link XC220 Dualband XPON ONT"
             ad_cls = TPLinkXC220Adapter
+        elif "archer" in combined or "c20" in combined or "c50" in combined:
+            model_name = "TP-Link Archer Dualband Router"
+            ad_cls = TPLinkWR840NAdapter
+        elif "wr840" in combined:
+            model_name = "TP-Link TL-WR840N Router"
+            ad_cls = TPLinkWR840NAdapter
+        elif "wr841" in combined:
+            model_name = "TP-Link TL-WR841N Router"
+            ad_cls = TPLinkWR840NAdapter
 
         return FingerprintResult(
             ip=ip,
