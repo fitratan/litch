@@ -67,6 +67,11 @@ class TendaBaseAdapter(BaseONTAdapter):
             payload = {"oldPwd": self.authenticated_password or "admin", "newPwd": new_password, "user": username}
             r = self.session.post(f"{self.base_url}/goform/setPassword", data=payload, timeout=self.timeout)
             if r.status_code in [200, 302]:
+                test_ad = self.__class__(self.ip, self.port, timeout=self.timeout)
+                test_ok, _ = test_ad.login(username, new_password)
+                if test_ok:
+                    self.authenticated_password = new_password
+                    return True, f"Password {username} Tenda berhasil diubah ke '{new_password}'"
                 return True, f"Password {username} Tenda berhasil diubah"
         except Exception as e:
             return False, f"Gagal ganti password Tenda: {str(e)}"

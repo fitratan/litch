@@ -113,6 +113,11 @@ class FiberhomeBaseAdapter(BaseONTAdapter):
             }
             r = self.session.post(f"{self.base_url}/cgi-bin/account.cgi", data=payload, timeout=self.timeout)
             if r.status_code in [200, 302]:
+                test_ad = self.__class__(self.ip, self.port, timeout=self.timeout)
+                test_ok, _ = test_ad.login(username, new_password)
+                if test_ok:
+                    self.authenticated_password = new_password
+                    return True, f"Password {username} Fiberhome berhasil diubah ke '{new_password}'"
                 return True, f"Password {username} Fiberhome berhasil diubah"
         except Exception as e:
             return False, f"Gagal ganti password: {str(e)}"

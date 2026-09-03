@@ -267,7 +267,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
         return {"username": "N/A", "vlan_id": "N/A", "mode": "N/A", "ip_address": "N/A"}
 
     def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
-        """Update web administration password."""
+        """Update web administration password with strict post-verification."""
         clean_pwd = new_password.strip()
         candidate_pages = ["manager_aduser_conf_t.gch", "manager_user_conf_t.gch", "sec_user_t.gch", "user_conf_t.gch"]
         for page in candidate_pages:
@@ -283,7 +283,6 @@ class ZTEBaseAdapter(BaseONTAdapter):
                 payload = {
                     "_SESSION_TOKEN": st,
                     "IF_ACTION": "apply",
-                    "IF_IDLE": "edit",
                     "IF_INDEX": idx,
                     "Username": username,
                     "Password": clean_pwd,
@@ -302,9 +301,16 @@ class ZTEBaseAdapter(BaseONTAdapter):
                     headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
                     timeout=4
                 )
-                if r_post.status_code == 200 and "error" not in r_post.text.lower():
-                    self.authenticated_password = clean_pwd
-                    return True, f"Password {username} berhasil diubah ke '{clean_pwd}'"
+                if r_post.status_code == 200:
+                    tms = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r_post.text))
+                    err_str = decode_hex(tms.get("IF_ERRORSTR", "")).upper()
+                    if err_str not in ["FAIL", "ERROR"]:
+                        # Live Post-Verification with fresh session
+                        test_ad = self.__class__(self.ip, self.port, timeout=self.timeout)
+                        test_ok, _ = test_ad.login(username, clean_pwd)
+                        if test_ok:
+                            self.authenticated_password = clean_pwd
+                            return True, f"Password {username} berhasil diubah ke '{clean_pwd}'"
             except Exception:
                 continue
 
