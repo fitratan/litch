@@ -207,22 +207,24 @@ class ZTEGM220Adapter(ZTEBaseAdapter):
                         raw_err = tms_res.get("IF_ERRORSTR", "")
                         err_val = decode_hex(raw_err).strip().upper()
 
-                        is_no_error = (
-                            err_val in ["", "NULL", "0", "SUCC", "SUCCESS", "NONE"]
-                            or "SUCC" in err_val
-                            or "SUCC" in res_text.upper()
-                            or "APPLIED" in res_text.upper()
+                        has_fatal_error = (
+                            err_val in ["FAIL", "ERROR", "INVALID", "E_PARAM", "EXCEED", "CONFLICT", "LOCKED"]
+                            or "FAIL" in err_val
+                            or "ERROR" in err_val
                         )
-                        has_fatal_error = any(k in err_val for k in ["FAIL", "ERROR", "INVALID", "E_PARAM", "EXCEED", "CONFLICT", "LOCKED"])
 
-                        if is_no_error and not has_fatal_error and r_edit.status_code == 200 and "login_t.gch" not in res_text:
-                            is_success = True
-                            success_msg = f"WAN GM220-S updated via Web GUI ({mode} | {target_name or f'Index {target_idx}'} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-                            break
-                        elif r_edit.status_code in [200, 302] and not has_fatal_error and len(res_text) > 500 and "login_t.gch" not in res_text:
-                            is_success = True
-                            success_msg = f"WAN GM220-S updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
-                            break
+                        if not has_fatal_error and r_edit.status_code == 200 and "login_t.gch" not in res_text:
+                            # Post-verification: Confirm username actually changed in device memory
+                            time.sleep(1.0)
+                            wan_chk = self.get_wan_info()
+                            if wan_chk.get("username") == user:
+                                is_success = True
+                                success_msg = f"WAN GM220-S berhasil diperbarui ({mode} | {target_name or f'Index {target_idx}'} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
+                                break
+                            elif not wan_chk.get("username") or wan_chk.get("username") == "N/A":
+                                is_success = True
+                                success_msg = f"WAN GM220-S updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user})"
+                                break
                     except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError):
                         is_success = True
                         success_msg = f"WAN GM220-S updated ({mode} | VLAN {actual_vlan or 'Bawaan'} | User: {user} - Network Synced)"

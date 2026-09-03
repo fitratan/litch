@@ -4,7 +4,9 @@ import re
 from typing import List, Tuple, Optional
 
 DEFAULT_CREDENTIALS = [
-    # Top 10 Field Cheat Sheet (95% Tembus di Lapangan RT/RW Net)
+    # Top Field Cheat Sheet
+    ("admin", "dnsolution"),
+    ("nara", "near"),
     ("telecomadmin", "admintelecom"), # Huawei GPON
     ("admin", "Telkomdso123"),        # ZTE F609 V1-V3
     ("admin", "telkomdso123"),        # ZTE F609 V1-V3 (lowercase)

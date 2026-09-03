@@ -20,6 +20,51 @@ def ensure_authenticated_device(
     """
     ip = device["ip"]
     adapter = device.get("adapter")
+    vendor = device.get("vendor", "")
+    port = device.get("port", 80)
+
+    if adapter is None:
+        v_upper = vendor.upper()
+        if "GM220" in v_upper:
+            from adapters.zte_gm220 import ZTEGM220Adapter
+            adapter = ZTEGM220Adapter(ip, port, timeout=3)
+        elif "F663" in v_upper:
+            from adapters.zte_f663 import ZTEF663Adapter
+            adapter = ZTEF663Adapter(ip, port, timeout=3)
+        elif "F609" in v_upper:
+            from adapters.zte_f609 import ZTEF609Adapter
+            adapter = ZTEF609Adapter(ip, port, timeout=3)
+        elif "F670" in v_upper:
+            from adapters.zte_f670 import ZTEF670Adapter
+            adapter = ZTEF670Adapter(ip, port, timeout=3)
+        elif "ZTE" in v_upper:
+            from adapters.zte import ZTEAdapter
+            adapter = ZTEAdapter(ip, port, timeout=3)
+        elif "HUAWEI" in v_upper or "HG8245" in v_upper or "EG8145" in v_upper:
+            from adapters.huawei import HuaweiAdapter
+            adapter = HuaweiAdapter(ip, port, timeout=3)
+        elif "FIBERHOME" in v_upper or "AN5506" in v_upper or "HG680" in v_upper:
+            from adapters.fiberhome import FiberhomeAdapter
+            adapter = FiberhomeAdapter(ip, port, timeout=3)
+        elif "VSOL" in v_upper or "V2801" in v_upper or "V2802" in v_upper:
+            from adapters.vsol import VSOLAdapter
+            adapter = VSOLAdapter(ip, port, timeout=3)
+        elif "TENDA" in v_upper or "N301" in v_upper or "F3" in v_upper or "HG9" in v_upper:
+            from adapters.tenda import TendaAdapter
+            adapter = TendaAdapter(ip, port, timeout=3)
+        elif "TP-LINK" in v_upper or "TPLINK" in v_upper or "WR840" in v_upper or "XC220" in v_upper:
+            from adapters.tplink import TPLinkAdapter
+            adapter = TPLinkAdapter(ip, port, timeout=3)
+        elif "MIKROTIK" in v_upper or "ROUTEROS" in v_upper:
+            from adapters.mikrotik import MikrotikAdapter
+            adapter = MikrotikAdapter(ip, port, timeout=3)
+        elif 23 in device.get("open_ports", []):
+            from adapters.telnet import TelnetAdapter
+            adapter = TelnetAdapter(ip, 23, timeout=3)
+        else:
+            from adapters.generic import GenericAdapter
+            adapter = GenericAdapter(ip, port, timeout=3)
+        device["adapter"] = adapter
 
     if adapter and getattr(adapter, "authenticated_user", None):
         return True, adapter.authenticated_user, adapter.authenticated_password, adapter

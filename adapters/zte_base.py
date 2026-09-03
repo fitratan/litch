@@ -203,15 +203,38 @@ class ZTEBaseAdapter(BaseONTAdapter):
                                 r_l = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=link_post, timeout=2.5)
                                 tms_l = dict(re.findall(r"Transfer_meaning\([\"\x27]([^\x27\"]+)[\"\x27]\s*,\s*[\"\x27]([^\x27\"]*)[\"\x27]\)", r_l.text))
                                 for k, v in tms_l.items():
-                                    if v != "NULL":
+                                    if v != "NULL" and (k not in clean_tms or not clean_tms[k]):
                                         clean_tms[k] = decode_hex(v)
                             except Exception:
                                 pass
 
-                    user = clean_tms.get("UserName1", clean_tms.get("UserName0", clean_tms.get("UserName2", clean_tms.get("Frm_UserName", ""))))
-                    vlan = clean_tms.get("VLANID1", clean_tms.get("VLANID0", clean_tms.get("VLANID2", clean_tms.get("Frm_VLANID", ""))))
-                    mode = clean_tms.get("TransType1", clean_tms.get("TransType0", clean_tms.get("TransType2", clean_tms.get("Frm_mode", "PPPoE"))))
-                    ip_addr = clean_tms.get("IPAddress1", clean_tms.get("IPAddress0", clean_tms.get("IPAddr0", "")))
+                    user = (
+                        clean_tms.get("UserName0")
+                        or clean_tms.get("UserName1")
+                        or clean_tms.get("UserName2")
+                        or clean_tms.get("Frm_UserName")
+                        or ""
+                    )
+                    vlan = (
+                        clean_tms.get("VLANID0")
+                        or clean_tms.get("VLANID1")
+                        or clean_tms.get("VLANID2")
+                        or clean_tms.get("Frm_VLANID")
+                        or ""
+                    )
+                    mode = (
+                        clean_tms.get("TransType0")
+                        or clean_tms.get("TransType1")
+                        or clean_tms.get("TransType2")
+                        or clean_tms.get("Frm_mode")
+                        or "PPPoE"
+                    )
+                    ip_addr = (
+                        clean_tms.get("IPAddress0")
+                        or clean_tms.get("IPAddress1")
+                        or clean_tms.get("IPAddr0")
+                        or ""
+                    )
                     return {
                         "username": user or "N/A",
                         "vlan_id": vlan or "N/A",
@@ -323,28 +346,50 @@ class ZTEBaseAdapter(BaseONTAdapter):
         ssid_idx = str(ssid_config.get("ssid_index", "1"))
         auth_mode = ssid_config.get("auth_mode", "WPA2-PSK")
 
-        for page in ["net_wlan_basic_t.gch", "wlan_security_basic_t.gch", "net_wlan_sec_t.gch", "net_wlan_conf_t.gch"]:
+        candidate_pages = [
+            "net_wlan_essid_t.gch",
+            "net_wlan_secrity_t.gch",
+            "net_wlan_basic_t.gch",
+            "wlan_security_basic_t.gch",
+            "net_wlan_sec_t.gch",
+            "net_wlan_conf_t.gch",
+        ]
+        for page in candidate_pages:
             try:
                 r1 = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", timeout=3)
+                if r1.status_code != 200 or len(r1.text) < 500 or "login_t.gch" in r1.text:
+                    continue
+
                 st_m = re.search(r"var\s+session_token\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]", r1.text)
                 st = st_m.group(1) if st_m else self.session_token
 
+                idx = str(int(ssid_idx) - 1)
                 payload = {
                     "_SESSION_TOKEN": st,
                     "IF_ACTION": "apply",
                     "IF_IDLE": "edit",
-                    "IF_INDEX": str(int(ssid_idx) - 1),
-                    f"ESSID{int(ssid_idx)-1}": ssid_name,
-                    f"KeyPassphrase{int(ssid_idx)-1}": ssid_pwd,
-                    f"BeaconType{int(ssid_idx)-1}": "11i" if "WPA2" in auth_mode else "None",
+                    "IF_INDEX": idx,
+                    f"ESSID{idx}": ssid_name,
+                    f"KeyPassphrase{idx}": ssid_pwd,
+                    f"BeaconType{idx}": "11i" if "WPA" in auth_mode else "None",
+                    "ESSID": ssid_name,
+                    "KeyPassphrase": ssid_pwd,
                     "Frm_ESSID": ssid_name,
                     "Frm_KeyPassphrase": ssid_pwd,
+                    "BeaconType": "11i" if "WPA" in auth_mode else "None",
+                    "11iAuthMode": "PSKAuthentication",
+                    "11iEncryptType": "AESEncryption",
                 }
-                r_post = self.session.post(f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}", data=payload, timeout=5)
-                if r_post.status_code == 200:
-                    return True, f"Wi-Fi SSID {ssid_name} berhasil diperbarui"
+                r_post = self.session.post(
+                    f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}",
+                    data=payload,
+                    headers={"Referer": f"{self.base_url}/getpage.gch?pid=1002&nextpage={page}"},
+                    timeout=5
+                )
+                if r_post.status_code == 200 and "error" not in r_post.text.lower():
+                    return True, f"Wi-Fi SSID '{ssid_name}' berhasil diperbarui"
             except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-                return True, f"Wi-Fi SSID {ssid_name} berhasil diperbarui (WLAN Synced)"
+                return True, f"Wi-Fi SSID '{ssid_name}' berhasil diperbarui (WLAN Synced)"
             except Exception:
                 continue
         return False, "Gagal mengonfigurasi Wi-Fi SSID ZTE"
