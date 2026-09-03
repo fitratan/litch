@@ -111,7 +111,11 @@ def process_single_ont(
         if "{ip_last}" in target_wan.get("pppoe_username", ""):
             target_wan["pppoe_username"] = target_wan["pppoe_username"].replace("{ip_last}", last_octet)
 
-        wan_success, wan_msg = adapter.configure_wan(target_wan)
+        try:
+            wan_success, wan_msg = adapter.configure_wan(target_wan)
+        except Exception as e:
+            wan_success, wan_msg = False, f"Failed to configure WAN: {str(e)}"
+
         result["wan_updated"] = wan_success
         result["message"] = wan_msg
 
@@ -121,7 +125,7 @@ def run_batch_provisioning(
     devices: List[Dict[str, Any]],
     wan_config: Dict[str, Any],
     custom_creds: List[Tuple[str, str]] = None,
-    max_workers: int = 35,
+    max_workers: int = 25,
     callback = None
 ) -> List[Dict[str, Any]]:
     """
