@@ -92,12 +92,30 @@ def detect_device_fingerprint(
         ZTEF609Adapter,
         ZTEF670Adapter,
     )
-    from adapters.huawei import HuaweiAdapter
+    from adapters.huawei import (
+        HuaweiAdapter,
+        HuaweiHG8245Adapter,
+        HuaweiEG8145Adapter,
+    )
+    from adapters.fiberhome import (
+        FiberhomeAdapter,
+        FiberhomeAN5506Adapter,
+        FiberhomeHG680Adapter,
+    )
+    from adapters.vsol import (
+        VSOLAdapter,
+        VSOLV2801Adapter,
+        VSOLV2802Adapter,
+    )
+    from adapters.tplink import (
+        TPLinkAdapter,
+        TPLinkXC220Adapter,
+    )
+    from adapters.tenda import (
+        TendaAdapter,
+        TendaHG9Adapter,
+    )
     from adapters.realtek_boa import RealtekBoAAdapter
-    from adapters.vsol import VSOLAdapter
-    from adapters.fiberhome import FiberhomeAdapter
-    from adapters.tenda import TendaAdapter
-    from adapters.tplink import TPLinkAdapter
     from adapters.mikrotik import MikrotikAdapter
     from adapters.generic import GenericAdapter
     from adapters.telnet import TelnetAdapter
@@ -205,17 +223,20 @@ def detect_device_fingerprint(
         or any(k in combined for k in ["huawei", "echolife", "hg8245", "hg8546", "eg8145", "eg8141", "hg8310"])
     ):
         model_name = "Huawei EchoLife GPON ONT"
+        ad_cls = HuaweiAdapter
         if "eg8145" in combined or "eg8141" in combined:
             model_name = "Huawei EG8145/EG8141 GPON ONT"
+            ad_cls = HuaweiEG8145Adapter
         elif "hg8245" in combined or "hg8546" in combined:
             model_name = "Huawei HG8245/HG8546 GPON ONT"
+            ad_cls = HuaweiHG8245Adapter
 
         return FingerprintResult(
             ip=ip,
             vendor=VendorEnum.HUAWEI,
             model=model_name,
-            driver_name="HuaweiAdapter",
-            adapter_class=HuaweiAdapter,
+            driver_name=ad_cls.__name__,
+            adapter_class=ad_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,
@@ -224,17 +245,22 @@ def detect_device_fingerprint(
             raw_banner=telnet_banner
         )
 
-    # --- C. REALTEK BOA OEM (VSOL, C-DATA, XPON GENERIC) ---
+    # --- C. REALTEK BOA OEM & VSOL ---
     # Signature: /boaform/admin/formLogin, Boa/0.94, vsol, cdata, xpon onu, fd511, v2801
     if (
         "boaform" in r_text
         or "boaform" in r_url
         or "boa/" in r_server
-        or any(k in combined for k in ["vsol", "c-data", "cdata", "v2801", "v2804", "fd511", "xpon onu", "epon onu", "syrotech", "netlink"])
+        or any(k in combined for k in ["vsol", "c-data", "cdata", "v2801", "v2802", "v2804", "fd511", "xpon onu", "epon onu", "syrotech", "netlink"])
     ):
         model_name = "Realtek BoA XPON/EPON ONU"
-        if "vsol" in combined or "v2801" in combined:
+        ad_cls = RealtekBoAAdapter
+        if "v2802" in combined or "v2804" in combined:
+            model_name = "VSOL V2802/V2804 Dualband ONT"
+            ad_cls = VSOLV2802Adapter
+        elif "vsol" in combined or "v2801" in combined:
             model_name = "VSOL V2801/XPON ONU"
+            ad_cls = VSOLV2801Adapter
         elif "c-data" in combined or "cdata" in combined or "fd511" in combined:
             model_name = "C-Data FD511/XPON ONU"
         elif "syrotech" in combined:
@@ -244,10 +270,10 @@ def detect_device_fingerprint(
 
         return FingerprintResult(
             ip=ip,
-            vendor=VendorEnum.REALTEK_BOA,
+            vendor=VendorEnum.REALTEK_BOA if ad_cls == RealtekBoAAdapter else VendorEnum.VSOL,
             model=model_name,
-            driver_name="RealtekBoAAdapter",
-            adapter_class=RealtekBoAAdapter,
+            driver_name=ad_cls.__name__,
+            adapter_class=ad_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,
@@ -262,12 +288,18 @@ def detect_device_fingerprint(
         "fh_login" in r_text
         or any(k in combined for k in ["fiberhome", "an5506", "hg680", "hg6243c"])
     ):
+        model_name = "Fiberhome AN5506 GPON ONT"
+        ad_cls = FiberhomeAN5506Adapter
+        if "hg680" in combined or "hg6243c" in combined:
+            model_name = "Fiberhome HG680 GPON ONT"
+            ad_cls = FiberhomeHG680Adapter
+
         return FingerprintResult(
             ip=ip,
             vendor=VendorEnum.FIBERHOME,
-            model="Fiberhome AN5506 GPON ONT",
-            driver_name="FiberhomeAdapter",
-            adapter_class=FiberhomeAdapter,
+            model=model_name,
+            driver_name=ad_cls.__name__,
+            adapter_class=ad_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,
@@ -296,14 +328,20 @@ def detect_device_fingerprint(
         "reasyui" in r_text
         or "b28n.js" in r_text
         or "goform/gethomepageinfo" in r_text
-        or any(k in combined for k in ["tenda wireless router", "tenda technology", "tenda", "n301", "f3", "ac10"])
+        or any(k in combined for k in ["tenda wireless router", "tenda technology", "tenda", "n301", "f3", "ac10", "hg9", "hg6", "hg3"])
     ):
+        model_name = "Tenda Router Wi-Fi / AP"
+        ad_cls = TendaAdapter
+        if any(k in combined for k in ["hg9", "hg6", "hg3"]):
+            model_name = "Tenda HG9 Dualband GPON ONT"
+            ad_cls = TendaHG9Adapter
+
         return FingerprintResult(
             ip=ip,
             vendor=VendorEnum.TENDA,
-            model="Tenda Router Wi-Fi / AP",
-            driver_name="TendaAdapter",
-            adapter_class=TendaAdapter,
+            model=model_name,
+            driver_name=ad_cls.__name__,
+            adapter_class=ad_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,
@@ -316,14 +354,20 @@ def detect_device_fingerprint(
     if (
         "userrpm" in r_text
         or "userrpm" in r_url
-        or any(k in combined for k in ["tp-link", "tplink", "wr840", "wr844", "wr841", "archer"])
+        or any(k in combined for k in ["tp-link", "tplink", "wr840", "wr844", "wr841", "archer", "xc220", "tx-6610"])
     ):
+        model_name = "TP-Link Router Wi-Fi / AP"
+        ad_cls = TPLinkAdapter
+        if "xc220" in combined or "tx-6610" in combined:
+            model_name = "TP-Link XC220 Dualband XPON ONT"
+            ad_cls = TPLinkXC220Adapter
+
         return FingerprintResult(
             ip=ip,
             vendor=VendorEnum.TPLINK,
-            model="TP-Link Router Wi-Fi / AP",
-            driver_name="TPLinkAdapter",
-            adapter_class=TPLinkAdapter,
+            model=model_name,
+            driver_name=ad_cls.__name__,
+            adapter_class=ad_cls,
             primary_port=primary_port,
             open_ports=open_ports,
             server_header=r_server,
