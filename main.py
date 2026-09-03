@@ -855,7 +855,7 @@ def run_interactive():
                     color = "green" if res["wan_updated"] else ("yellow" if res["login_success"] else "red")
                     console.print(f"   [{color}]{status_icon} [{res['ip']}][/{color}] {res['vendor']} — {res['message']}")
 
-                results = run_batch_provisioning(target_devices, wan_config, custom_creds, max_workers=60, callback=exec_cb)
+                results = run_batch_provisioning(target_devices, wan_config, custom_creds, max_workers=25, callback=exec_cb)
 
             print_execution_summary(results, choice)
 
