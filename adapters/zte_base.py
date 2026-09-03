@@ -90,6 +90,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
         if self.session_token and not force_refresh:
             return self.session_token
 
+        self.check_token = ""
         for candidate_url in [
             f"{self.base_url}/",
             f"{self.base_url}/getpage.gch?pid=1002&nextpage=login_t.gch",
@@ -98,6 +99,9 @@ class ZTEBaseAdapter(BaseONTAdapter):
             try:
                 r = self.session.get(candidate_url, timeout=self.timeout)
                 tok = self._extract_token_from_html(r.text)
+                chk_m = re.search(r'getObj\([\"\x27]Frm_Loginchecktoken[\"\x27]\)\.value\s*=\s*[\"\x27]([^\x27\"]+)[\"\x27]', r.text)
+                if chk_m:
+                    self.check_token = chk_m.group(1)
                 if tok:
                     self.session_token = tok
                     return tok
@@ -107,6 +111,7 @@ class ZTEBaseAdapter(BaseONTAdapter):
 
     def login(self, username: str, password: str) -> Tuple[bool, str]:
         """Unified challenge-response login across ZTE firmware."""
+        import random
         self.session_token = ""
         token = self.get_login_token(force_refresh=True)
 
@@ -114,6 +119,9 @@ class ZTEBaseAdapter(BaseONTAdapter):
         md5_pure = hashlib.md5(clean_pwd.encode("utf-8")).hexdigest()
         md5_token = hashlib.md5((clean_pwd + token).encode("utf-8")).hexdigest() if token else md5_pure
         sha256_token = hashlib.sha256((clean_pwd + token).encode("utf-8")).hexdigest() if token else clean_pwd
+
+        rand_num = random.randint(10000000, 99999999)
+        sha256_random = hashlib.sha256((clean_pwd + str(rand_num)).encode("utf-8")).hexdigest()
 
         payloads = [
             # 1. GM220-S & Universal Plaintext + FormToken
@@ -129,11 +137,23 @@ class ZTEBaseAdapter(BaseONTAdapter):
                 "frashnum": "",
                 "login": "Login",
             },
-            # 2. SHA256 + Token (F670, F663)
+            # 2. ZXHN F663NV9 / F663NV3A / F670L Random Salted SHA256
+            {
+                "UserNM": username,
+                "UserPW": sha256_random,
+                "UserRandomNum": str(rand_num),
+                "Frm_Logintoken": token or "32",
+                "Frm_Loginchecktoken": getattr(self, "check_token", "") or "",
+                "Username": username,
+                "Password": clean_pwd,
+                "action": "login",
+                "login": "Login",
+            },
+            # 3. SHA256 + Token (F670, F663)
             {"Username": username, "Password": sha256_token, "Frm_Logintoken": token, "action": "login", "login": "Login"},
-            # 3. MD5 + Token (Classic F609, F660, F477)
+            # 4. MD5 + Token (Classic F609, F660, F477)
             {"Username": username, "Password": md5_token, "Frm_Logintoken": token, "action": "login", "login": "Login"},
-            # 4. Pure MD5
+            # 5. Pure MD5
             {"Username": username, "Password": md5_pure, "Frm_Logintoken": token, "action": "login"},
         ]
 

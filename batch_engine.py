@@ -290,8 +290,8 @@ def inspect_single_device(
     - Fallbacks to Telnet if Web HTTP fails
     """
     ip = device["ip"]
-    adapter = device["adapter"]
-    driver_name = device.get("driver_name") or adapter.__class__.__name__
+    adapter = device.get("adapter")
+    driver_name = device.get("driver_name") or (adapter.__class__.__name__ if adapter else "AutoAdapter")
 
     dev_data = dict(device)
     dev_data["driver_name"] = driver_name

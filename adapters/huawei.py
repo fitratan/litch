@@ -32,6 +32,37 @@ class HuaweiAdapter(HuaweiBaseAdapter):
         self._sub_adapter.authenticated_password = self.authenticated_password
         return self._sub_adapter
 
+    def login(self, username: str, password: str) -> Tuple[bool, str]:
+        sub = self._resolve_model_adapter()
+        ok, msg = sub.login(username, password)
+        self.authenticated_user = sub.authenticated_user
+        self.authenticated_password = sub.authenticated_password
+        return ok, msg
+
+    def get_wan_info(self) -> Dict[str, Any]:
+        return self._resolve_model_adapter().get_wan_info()
+
+    def get_wifi_info(self) -> Dict[str, Any]:
+        return self._resolve_model_adapter().get_wifi_info()
+
+    def configure_wan(self, wan_config: Dict[str, Any]) -> Tuple[bool, str]:
+        return self._resolve_model_adapter().configure_wan(wan_config)
+
+    def change_password(self, new_password: str, username: str = "admin") -> Tuple[bool, str]:
+        return self._resolve_model_adapter().change_password(new_password, username)
+
+    def configure_wlan_ssid(self, ssid_config: Dict[str, Any]) -> Tuple[bool, str]:
+        return self._resolve_model_adapter().configure_wlan_ssid(ssid_config)
+
+    def reboot(self) -> Tuple[bool, str]:
+        return self._resolve_model_adapter().reboot()
+
+    def lock_anti_reset(self, lock_config: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+        return self._resolve_model_adapter().lock_anti_reset(lock_config)
+
+    def get_optical_power(self) -> Dict[str, Any]:
+        return self._resolve_model_adapter().get_optical_power()
+
 __all__ = [
     "HuaweiBaseAdapter",
     "HuaweiHG8245Adapter",
