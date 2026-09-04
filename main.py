@@ -48,6 +48,15 @@ from credentials import (
 )
 from security_audit import run_batch_pentest, detect_rogue_dhcp_servers, AUDIT_PORTS
 from auth import require_authentication, change_master_credentials
+from technician_suite import (
+    calculate_wps_pins,
+    render_wifi_qr_code,
+    extract_ont_full_wifi_info,
+    run_ping_jitter_test,
+    run_bandwidth_speedtest,
+    format_technician_job_report,
+    dispatch_telegram_report
+)
 
 console = Console(emoji=False)
 
@@ -625,9 +634,10 @@ def run_interactive():
         console.print("   [10] Manajemen Password & Kamus Kredensial")
         console.print("   [11] Batch Anti-Reset ONT (Kunci Konfigurasi ke ROM & Kunci Tombol Reset Fisik)")
         console.print("   [12] Ubah Username & Password Master Aplikasi (Keamanan Engine)")
+        console.print("   [13] Mode Teknisi Lapangan (Wi-Fi Inspector, QR Auto-Connect, WPS PIN & Speedtest)")
         console.print("   [0] Keluar")
 
-        choice = Prompt.ask("\n   Pilihan Anda", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"], default="1")
+        choice = Prompt.ask("\n   Pilihan Anda", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"], default="1")
 
         if choice == "0":
             console.print("[dim]Terima kasih. Program selesai.[/dim]")
@@ -714,6 +724,136 @@ def run_interactive():
 
         if choice == "12":
             change_master_credentials()
+            continue
+
+        if choice == "13":
+            # Mode Teknisi Lapangan (Field Suite)
+            while True:
+                console.print("\n[bold cyan]=== [MODE TEKNISI LAPANGAN / FIELD SUITE] ===[/bold cyan]")
+                console.print("   [1] Ekstrak Wi-Fi & Tampilkan QR Code (Konek Instan Tanpa Tanya)")
+                console.print("   [2] Hitung Default WPS PIN Router dari BSSID / MAC Address")
+                console.print("   [3] Uji Kualitas Jaringan & Speedtest (Ping, Jitter, Bandwidth)")
+                console.print("   [4] Laporan Pekerjaan Lapangan & Kirim ke Telegram (Proof of Work)")
+                console.print("   [0] Kembali ke Menu Utama")
+
+                t_choice = Prompt.ask("\n   Pilihan Toolkit", choices=["0", "1", "2", "3", "4"], default="1")
+
+                if t_choice == "0":
+                    break
+
+                if t_choice == "1":
+                    # 1. Ekstrak Wi-Fi & QR Code
+                    gw = get_default_gateway()
+                    def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
+                    target_ip = Prompt.ask("   IP Address ONT/Modem Target", default=def_ip)
+
+                    with console.status(f"[cyan]Menghubungi ONT {target_ip} & mengekstrak kredensial Wi-Fi...[/cyan]"):
+                        res_info = extract_ont_full_wifi_info(target_ip, creds)
+
+                    if not res_info.get("success"):
+                        console.print(f"[bold red][FAIL] {res_info.get('message')}[/bold red]")
+                        continue
+
+                    wifi = res_info.get("wifi", {})
+                    optical = res_info.get("optical", {})
+                    wan = res_info.get("wan", {})
+
+                    console.print(f"\n[bold green]=== DATA ONT & WI-FI BERHASIL DIEKSTRAK ===[/bold green]")
+                    console.print(f"   IP Address   : [bold white]{res_info['ip']}[/bold white] ({res_info['vendor']})")
+                    console.print(f"   Wi-Fi SSID   : [bold cyan]{wifi.get('ssid', 'N/A')}[/bold cyan]")
+                    console.print(f"   Wi-Fi Pass   : [bold yellow]{wifi.get('password', 'N/A')}[/bold yellow]")
+                    console.print(f"   Keamanan     : [white]{wifi.get('auth_mode', 'WPA2-PSK')}[/white]")
+                    console.print(f"   Redaman PON  : [magenta]{optical.get('rx_power_dbm', 'N/A')} dBm[/magenta] (Status: {optical.get('status', 'N/A')})")
+                    console.print(f"   User PPPoE   : [cyan]{wan.get('pppoe_user', 'N/A')}[/cyan]")
+
+                    if wifi.get("ssid") and wifi.get("ssid") != "N/A":
+                        console.print("\n[bold yellow]Scan QR Code berikut dengan Kamera HP untuk Konek Instan:[/bold yellow]")
+                        qr_ascii = render_wifi_qr_code(wifi["ssid"], wifi.get("password", ""), wifi.get("auth_mode", "WPA"))
+                        console.print(Panel(qr_ascii, title=f"[bold green]QR CODE WI-FI: {wifi['ssid']}[/bold green]", border_style="green", expand=False))
+                    continue
+
+                elif t_choice == "2":
+                    # 2. WPS PIN Calculator
+                    mac_in = Prompt.ask("   Masukkan BSSID / MAC Address Router (Contoh: 14:AD:CA:51:97:F1)")
+                    pins = calculate_wps_pins(mac_in)
+                    if not pins:
+                        console.print("[bold red]Format MAC Address tidak valid! Minimal 12 karakter hex.[/bold red]")
+                        continue
+
+                    wps_table = Table(title=f"Kalkulasi Kemungkinan Default WPS PIN ({mac_in.upper()})", border_style="cyan")
+                    wps_table.add_column("No", justify="center", style="dim")
+                    wps_table.add_column("Algoritma / Vendor Target", style="bold white")
+                    wps_table.add_column("Perkiraan PIN", style="bold green", justify="center")
+                    wps_table.add_column("Tingkat Akurasi", justify="center", style="yellow")
+                    wps_table.add_column("Keterangan", style="dim")
+
+                    for idx, p in enumerate(pins, 1):
+                        wps_table.add_row(str(idx), p["algorithm"], f"[bold green]{p['pin']}[/bold green]", p["confidence"], p["desc"])
+                    console.print(wps_table)
+                    console.print("[dim]Gunakan PIN di atas pada menu WPS PIN / PIN Connection di perangkat HP atau router.[/dim]")
+                    continue
+
+                elif t_choice == "3":
+                    # 3. Network Latency & Speedtest
+                    gw = get_default_gateway()
+                    gw_ip = gw['gateway_ip'] if gw else "192.168.1.1"
+
+                    console.print(f"\n[bold yellow]Menjalankan Uji Latensi & Jitter...[/bold yellow]")
+                    with console.status("[cyan]Menguji ping ke Gateway & DNS Publik (1.1.1.1)...[/cyan]"):
+                        ping_gw = run_ping_jitter_test(gw_ip, count=4)
+                        ping_inet = run_ping_jitter_test("1.1.1.1", count=5)
+
+                    console.print(f"   [OK] Ping Gateway ({gw_ip}): [bold white]{ping_gw['avg_ms']} ms[/bold white] (Loss: {ping_gw['loss_pct']}%)")
+                    console.print(f"   [OK] Ping Internet (1.1.1.1): [bold white]{ping_inet['avg_ms']} ms[/bold white] (Jitter: [cyan]{ping_inet['jitter_ms']} ms[/cyan] | Loss: {ping_inet['loss_pct']}%)")
+
+                    console.print(f"\n[bold yellow]Menjalankan Uji Bandwidth Real Speedtest...[/bold yellow]")
+                    with console.status("[cyan]Mengunduh chunk data CDN untuk mengukur bandwidth riil...[/cyan]"):
+                        speed_res = run_bandwidth_speedtest(duration_sec=4)
+
+                    console.print(Panel(
+                        f"[bold white]Download Speed  :[/bold white] [bold green]{speed_res['download_mbps']} Mbps[/bold green]\n"
+                        f"[bold white]Latency Gateway :[/bold white] [cyan]{ping_gw['avg_ms']} ms[/cyan]\n"
+                        f"[bold white]Latency Internet:[/bold white] [cyan]{ping_inet['avg_ms']} ms[/cyan] (Jitter: {ping_inet['jitter_ms']} ms)\n"
+                        f"[bold white]Packet Loss     :[/bold white] [{'green' if ping_inet['loss_pct']==0 else 'red'}]{ping_inet['loss_pct']}%[/{'green' if ping_inet['loss_pct']==0 else 'red'}]\n"
+                        f"[bold white]Kualitas Link   :[/bold white] [bold green]{speed_res['status']}[/bold green]",
+                        title="[bold cyan]Hasil Uji Kualitas Jaringan Lapangan[/bold cyan]",
+                        border_style="cyan"
+                    ))
+                    continue
+
+                elif t_choice == "4":
+                    # 4. Job Report & Telegram Dispatch
+                    gw = get_default_gateway()
+                    def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
+
+                    tech_name = Prompt.ask("   Nama Teknisi", default="Teknisi Lapangan")
+                    cust_name = Prompt.ask("   Nama / ID Pelanggan", default="Pelanggan")
+                    modem_ip = Prompt.ask("   IP Modem Target", default=def_ip)
+                    notes_txt = Prompt.ask("   Catatan Pekerjaan (Opsional)", default="Pemasangan/perbaikan selesai, koneksi stabil.")
+
+                    with console.status("[cyan]Mengumpulkan data ONT & melakukan speedtest...[/cyan]"):
+                        ont_info = extract_ont_full_wifi_info(modem_ip, creds)
+                        ping_gw = run_ping_jitter_test(modem_ip, count=3)
+                        ping_inet = run_ping_jitter_test("1.1.1.1", count=4)
+                        speed_res = run_bandwidth_speedtest(duration_sec=3)
+                        speed_data = {
+                            "ping_gw": ping_gw,
+                            "ping_inet": ping_inet,
+                            "download_mbps": speed_res.get("download_mbps", 0.0)
+                        }
+
+                    report_text = format_technician_job_report(tech_name, cust_name, ont_info, speed_data, notes=notes_txt)
+                    console.print("\n[bold cyan]=== PRATINJAU LAPORAN PEKERJAAN ===[/bold cyan]")
+                    console.print(report_text.replace("<b>", "").replace("</b>", "").replace("<code>", "").replace("</code>", ""))
+
+                    if Confirm.ask("\n   Kirim laporan ini langsung ke Telegram?", default=True):
+                        with console.status("[cyan]Mengirim laporan ke Telegram...[/cyan]"):
+                            ok_tg, msg_tg = dispatch_telegram_report(report_text)
+                        if ok_tg:
+                            console.print(f"[bold green][OK] {msg_tg}[/bold green]")
+                        else:
+                            console.print(f"[bold yellow][!] {msg_tg}[/bold yellow]")
+                    continue
             continue
 
         # Need deep inspection ONLY if choice == '8'

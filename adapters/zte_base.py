@@ -174,16 +174,24 @@ class ZTEBaseAdapter(BaseONTAdapter):
                         timeout=max(self.timeout, 4),
                         allow_redirects=True,
                     )
-                    res_text = r.text.lower()
+                    # Check if login page was returned (Failed authentication)
+                    is_login_page = (
+                        "login.css" in res_text
+                        or "login_t.gch" in res_text
+                        or "onclicksetlang" in res_text
+                        or "user name or password error" in res_text
+                        or "settime()" in res_text
+                    )
 
-                    if any(k in res_text for k in ["logout", "main.gch", "status_t.gch", "top.gch", "menu.gch", "net_wan_conf_t.gch", "net_gponwan_conf_t.gch", "net_ethwan_conf_t.gch"]):
-                        self.authenticated_user = username
-                        self.authenticated_password = password
-                        return True, f"Login sukses via Web GUI ({username})"
+                    if not is_login_page:
+                        if any(k in res_text for k in ["main.gch", "status_t.gch", "top.gch", "menu.gch", "template_g.gch", "net_wan_conf_t.gch", "net_gponwan_conf_t.gch", "net_ethwan_conf_t.gch"]) or len(r.text) > 10000:
+                            self.authenticated_user = username
+                            self.authenticated_password = password
+                            return True, f"Login sukses via Web GUI ({username})"
 
-                    if r.status_code == 200 and "login_t.gch" not in res_text and len(r.text) > 300:
+                    if r.status_code == 200 and not is_login_page and len(r.text) > 500:
                         r_test = self.session.get(f"{self.base_url}/getpage.gch?pid=1002&nextpage=net_ethwan_conf_t.gch", timeout=2)
-                        if r_test.status_code == 200 and "login_t.gch" not in r_test.text.lower() and len(r_test.text) > 1000:
+                        if r_test.status_code == 200 and "login_t.gch" not in r_test.text.lower() and "login.css" not in r_test.text.lower() and len(r_test.text) > 1000:
                             self.authenticated_user = username
                             self.authenticated_password = password
                             return True, f"Login sukses via Web GUI ({username})"
