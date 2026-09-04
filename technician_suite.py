@@ -2,19 +2,22 @@
 """
 technician_suite.py - LITCH Field Technician Suite
 Provides:
-1. Direct ONT Wi-Fi Extractor (SSID & Password retrieval)
-2. Terminal ASCII QR Code Generator for 1-click camera connection
-3. Offline Multi-Algorithm WPS PIN Calculator
-4. Built-in Network Latency, Jitter & Bandwidth Speedtest
-5. Telegram Job Report Dispatcher (Proof of Work)
+1. Air Wi-Fi Scanner (Scan SSID, BSSID, Signal RSSI, Channel, Security di Udara)
+2. Direct ONT Wi-Fi Extractor (SSID & Password retrieval from Gateway/LAN)
+3. Terminal ASCII QR Code Generator for 1-click camera connection
+4. Offline Multi-Algorithm WPS PIN Calculator
+5. Built-in Network Latency, Jitter & Bandwidth Speedtest
+6. Telegram Job Report Dispatcher (Proof of Work)
 """
 
 import sys
 import os
 import re
 import time
+import json
 import socket
 import struct
+import shutil
 import subprocess
 import threading
 from typing import Dict, Any, List, Tuple, Optional
@@ -35,7 +38,209 @@ console = Console(emoji=False)
 
 
 # ==========================================
-# 1. WPS PIN CALCULATION ENGINE
+# 1. AIR WI-FI SCANNER (SCANNER SSID TERDEKAT)
+# ==========================================
+
+VENDOR_OUI_MAP = {
+    "14:AD:CA": "ZTE Corporation",
+    "00:1E:73": "ZTE Corporation",
+    "48:28:2F": "ZTE Corporation",
+    "64:13:6C": "ZTE Corporation",
+    "78:6A:89": "ZTE Corporation",
+    "A8:A6:68": "ZTE Corporation",
+    "CC:7B:35": "ZTE Corporation",
+    "D8:74:95": "ZTE Corporation",
+    "E8:65:D4": "ZTE Corporation",
+    "F4:6D:E2": "ZTE Corporation",
+    "F4:8E:92": "ZTE Corporation",
+    "48:46:FB": "Huawei Technologies",
+    "00:46:4B": "Huawei Technologies",
+    "10:47:80": "Huawei Technologies",
+    "18:C5:8A": "Huawei Technologies",
+    "20:F3:A3": "Huawei Technologies",
+    "70:7B:E8": "Huawei Technologies",
+    "AC:E2:15": "Huawei Technologies",
+    "C8:D1:5E": "Huawei Technologies",
+    "00:0A:EB": "TP-Link Corporation",
+    "50:D4:F7": "TP-Link Corporation",
+    "60:32:B1": "TP-Link Corporation",
+    "98:DA:C4": "TP-Link Corporation",
+    "C0:06:C3": "TP-Link Corporation",
+    "C8:3A:35": "Tenda Technology",
+    "50:2B:73": "Tenda Technology",
+    "CC:2D:21": "Tenda Technology",
+    "00:25:9E": "FiberHome Telecomm",
+    "00:0F:E2": "FiberHome Telecomm",
+    "48:7D:2E": "FiberHome Telecomm",
+    "84:79:73": "FiberHome Telecomm",
+    "E0:67:B3": "FiberHome Telecomm",
+    "00:0C:42": "Mikrotikls SIA",
+    "48:8F:5A": "Mikrotikls SIA",
+    "6C:3B:6B": "Mikrotikls SIA",
+    "B8:69:F4": "Mikrotikls SIA",
+    "D4:CA:6D": "Mikrotikls SIA",
+    "E4:8D:8C": "Mikrotikls SIA",
+    "00:1B:11": "D-Link International",
+    "1C:7E:E5": "D-Link International",
+    "34:36:54": "Realtek / Generic",
+    "00:E0:4C": "Realtek Semiconductor",
+}
+
+
+def lookup_vendor_by_mac(mac_str: str) -> str:
+    """Identify device manufacturer from BSSID OUI prefix."""
+    clean = re.sub(r"[^0-9A-Fa-f]", "", mac_str).upper()
+    if len(clean) >= 6:
+        prefix = f"{clean[:2]}:{clean[2:4]}:{clean[4:6]}"
+        if prefix in VENDOR_OUI_MAP:
+            return VENDOR_OUI_MAP[prefix]
+    return "Unknown / Generic Router"
+
+
+def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
+    """
+    Scan all broadcast Wi-Fi SSIDs in the air without being connected.
+    Supports Android Termux (termux-wifi-scaninfo), nmcli, iwlist, and wpa_cli.
+    """
+    results = []
+    seen_bssids = set()
+
+    # 1. Android Termux API (termux-wifi-scaninfo)
+    if shutil.which("termux-wifi-scaninfo"):
+        try:
+            p = subprocess.run(["termux-wifi-scaninfo"], capture_output=True, text=True, timeout=6)
+            if p.returncode == 0 and p.stdout.strip():
+                data = json.loads(p.stdout)
+                for item in data:
+                    bssid = item.get("bssid", "").upper().replace("\\", "")
+                    if bssid in seen_bssids or not bssid:
+                        continue
+                    seen_bssids.add(bssid)
+                    freq = item.get("frequency_mhz", 2412)
+                    chan = (freq - 2407) // 5 if freq < 3000 else (freq - 5000) // 5
+                    sec = item.get("capabilities", "WPA2")
+                    results.append({
+                        "ssid": item.get("ssid") or "<Hidden SSID>",
+                        "bssid": bssid,
+                        "rssi": item.get("rssi", -70),
+                        "freq_mhz": freq,
+                        "band": "5GHz" if freq > 3000 else "2.4GHz",
+                        "channel": str(chan),
+                        "security": sec,
+                        "has_wps": "WPS" in sec.upper(),
+                        "vendor": lookup_vendor_by_mac(bssid)
+                    })
+                if results:
+                    return sorted(results, key=lambda x: x["rssi"], reverse=True)
+        except Exception:
+            pass
+
+    # 2. Linux NetworkManager (nmcli)
+    if shutil.which("nmcli"):
+        try:
+            # Trigger fresh rescan
+            subprocess.run(["nmcli", "dev", "wifi", "rescan"], capture_output=True, text=True, timeout=4)
+            p = subprocess.run(
+                ["nmcli", "-t", "-f", "SSID,BSSID,CHAN,FREQ,SIGNAL,SECURITY,WPS", "dev", "wifi", "list"],
+                capture_output=True, text=True, timeout=6
+            )
+            if p.returncode == 0 and p.stdout.strip():
+                for line in p.stdout.strip().splitlines():
+                    # Format: SSID:BSSID:CHAN:FREQ:SIGNAL:SECURITY:WPS
+                    parts = line.split(":")
+                    if len(parts) >= 6:
+                        # BSSID might have escaped colons or split into parts
+                        # Find the MAC-like portion
+                        mac_match = re.search(r"([0-9A-Fa-f]{2}(?:\\?:[0-9A-Fa-f]{2}){5})", line)
+                        if not mac_match:
+                            continue
+                        raw_bssid = mac_match.group(1).replace("\\", "").upper()
+                        if raw_bssid in seen_bssids:
+                            continue
+                        seen_bssids.add(raw_bssid)
+
+                        ssid = parts[0].strip() or "<Hidden SSID>"
+                        # Find other fields
+                        sig = parts[-3] if len(parts) >= 7 else parts[-2]
+                        sec = parts[-2] if len(parts) >= 7 else parts[-1]
+                        wps_val = parts[-1] if len(parts) >= 7 else ""
+
+                        try:
+                            rssi_calc = int((int(sig) / 2) - 100) if sig.isdigit() else -70
+                        except Exception:
+                            rssi_calc = -70
+
+                        freq_str = line
+                        is_5g = "5" in line and ("5180" in line or "5240" in line or "5745" in line or "5805" in line)
+
+                        results.append({
+                            "ssid": ssid,
+                            "bssid": raw_bssid,
+                            "rssi": rssi_calc,
+                            "freq_mhz": 5000 if is_5g else 2400,
+                            "band": "5GHz" if is_5g else "2.4GHz",
+                            "channel": parts[2] if len(parts) > 2 and parts[2].isdigit() else "-",
+                            "security": sec or "WPA2",
+                            "has_wps": "yes" in wps_val.lower() or "wps" in sec.lower(),
+                            "vendor": lookup_vendor_by_mac(raw_bssid)
+                        })
+                if results:
+                    return sorted(results, key=lambda x: x["rssi"], reverse=True)
+        except Exception:
+            pass
+
+    # 3. Linux iwlist fallback
+    if shutil.which("iwlist"):
+        try:
+            p = subprocess.run(["iwlist", "scan"], capture_output=True, text=True, timeout=8)
+            if p.returncode == 0 and p.stdout.strip():
+                cells = p.stdout.split("Cell ")
+                for c in cells[1:]:
+                    mac_m = re.search(r"Address:\s*([0-9A-Fa-f:]{17})", c)
+                    essid_m = re.search(r'ESSID:"([^"]*)"', c)
+                    sig_m = re.search(r"Signal level=([-\d]+)\s*dBm", c)
+                    chan_m = re.search(r"Channel:(\d+)", c)
+                    if mac_m:
+                        bssid = mac_m.group(1).upper()
+                        if bssid in seen_bssids:
+                            continue
+                        seen_bssids.add(bssid)
+                        ssid = essid_m.group(1) if essid_m else "<Hidden SSID>"
+                        rssi = int(sig_m.group(1)) if sig_m else -70
+                        chan = chan_m.group(1) if chan_m else "-"
+                        results.append({
+                            "ssid": ssid,
+                            "bssid": bssid,
+                            "rssi": rssi,
+                            "freq_mhz": 5000 if chan.isdigit() and int(chan) > 14 else 2400,
+                            "band": "5GHz" if chan.isdigit() and int(chan) > 14 else "2.4GHz",
+                            "channel": chan,
+                            "security": "WPA2" if "WPA2" in c else ("WPA" if "WPA" in c else "Open"),
+                            "has_wps": "WPS" in c or "Wi-Fi Protected Setup" in c,
+                            "vendor": lookup_vendor_by_mac(bssid)
+                        })
+                if results:
+                    return sorted(results, key=lambda x: x["rssi"], reverse=True)
+        except Exception:
+            pass
+
+    return sorted(results, key=lambda x: x["rssi"], reverse=True)
+
+
+def get_signal_bar(rssi_dbm: int) -> Tuple[str, str]:
+    """Format RSSI into visual signal indicator and strength label."""
+    if rssi_dbm >= -50:
+        return "[bold green][████][/bold green]", "[bold green]Sangat Kuat (Dekat)[/bold green]"
+    elif rssi_dbm >= -65:
+        return "[bold green][███ ][/bold green]", "[green]Kuat / Bagus[/green]"
+    elif rssi_dbm >= -78:
+        return "[bold yellow][██  ][/bold yellow]", "[yellow]Sedang[/yellow]"
+    else:
+        return "[bold red][█   ][/bold red]", "[red]Lemah (Jauh)[/red]"
+
+
+# ==========================================
+# 2. WPS PIN CALCULATION ENGINE
 # ==========================================
 
 def wps_checksum(pin_7_digits: int) -> int:
@@ -57,7 +262,6 @@ def calculate_wps_pins(bssid_or_mac: str) -> List[Dict[str, Any]]:
     if len(clean_mac) < 12:
         return []
 
-    mac_int = int(clean_mac, 16)
     nic_int = int(clean_mac[6:], 16)  # Last 3 bytes (NIC)
     mac_bytes = [int(clean_mac[i:i+2], 16) for i in range(0, 12, 2)]
 
@@ -147,7 +351,7 @@ def calculate_wps_pins(bssid_or_mac: str) -> List[Dict[str, Any]]:
 
 
 # ==========================================
-# 2. ASCII QR CODE GENERATOR FOR TERMINAL
+# 3. ASCII QR CODE GENERATOR FOR TERMINAL
 # ==========================================
 
 def render_wifi_qr_code(ssid: str, password: str = "", auth_type: str = "WPA", hidden: bool = False) -> str:
@@ -196,7 +400,7 @@ def render_wifi_qr_code(ssid: str, password: str = "", auth_type: str = "WPA", h
 
 
 # ==========================================
-# 3. DIRECT ONT WI-FI & DIAGNOSTIC EXTRACTOR
+# 4. DIRECT ONT WI-FI & DIAGNOSTIC EXTRACTOR
 # ==========================================
 
 def extract_ont_full_wifi_info(ip: str, custom_creds: Optional[List[Tuple[str, str]]] = None) -> Dict[str, Any]:
@@ -303,7 +507,7 @@ def extract_ont_full_wifi_info(ip: str, custom_creds: Optional[List[Tuple[str, s
 
 
 # ==========================================
-# 4. NETWORK LATENCY, JITTER & SPEEDTEST
+# 5. NETWORK LATENCY, JITTER & SPEEDTEST
 # ==========================================
 
 def run_ping_jitter_test(target_host: str, count: int = 5, timeout_sec: float = 1.0) -> Dict[str, Any]:
@@ -316,11 +520,10 @@ def run_ping_jitter_test(target_host: str, count: int = 5, timeout_sec: float = 
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(timeout_sec)
-            # Try port 80 or 53
             res = sock.connect_ex((target_host, 80 if target_host != "1.1.1.1" and target_host != "8.8.8.8" else 53))
             t1 = time.time()
             sock.close()
-            if res == 0 or res == 111:  # 111 = Connection refused (means host is up and reached!)
+            if res == 0 or res == 111:
                 latencies.append((t1 - t0) * 1000)
             else:
                 lost += 1
@@ -335,7 +538,6 @@ def run_ping_jitter_test(target_host: str, count: int = 5, timeout_sec: float = 
     max_l = max(latencies)
     avg_l = sum(latencies) / len(latencies)
     
-    # Calculate Jitter (average difference between consecutive samples)
     diffs = [abs(latencies[i] - latencies[i - 1]) for i in range(1, len(latencies))]
     jitter = sum(diffs) / len(diffs) if diffs else 0.0
     loss_pct = int((lost / count) * 100)
@@ -387,7 +589,7 @@ def run_bandwidth_speedtest(duration_sec: int = 4) -> Dict[str, Any]:
 
 
 # ==========================================
-# 5. TELEGRAM JOB REPORT (PROOF OF WORK)
+# 6. TELEGRAM JOB REPORT (PROOF OF WORK)
 # ==========================================
 
 def format_technician_job_report(
