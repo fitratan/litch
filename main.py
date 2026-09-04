@@ -57,7 +57,13 @@ from technician_suite import (
     run_ping_jitter_test,
     run_bandwidth_speedtest,
     format_technician_job_report,
-    dispatch_telegram_report
+    dispatch_telegram_report,
+    generate_wifi_password_candidates,
+    run_wifi_wpa_bruteforce,
+    generate_hidden_ssid_candidates,
+    run_hidden_ssid_revealer,
+    get_wps_pin_candidate_list,
+    run_wps_pin_attack
 )
 
 console = Console(emoji=False)
@@ -636,7 +642,7 @@ def run_interactive():
         console.print("   [10] Manajemen Password & Kamus Kredensial")
         console.print("   [11] Batch Anti-Reset ONT (Kunci Konfigurasi ke ROM & Kunci Tombol Reset Fisik)")
         console.print("   [12] Ubah Username & Password Master Aplikasi (Keamanan Engine)")
-        console.print("   [13] Mode Teknisi Lapangan (Wi-Fi Inspector, QR Auto-Connect, WPS PIN & Speedtest)")
+        console.print("   [13] Mode Teknisi Lapangan (Wi-Fi Brute Force, Hidden Revealer, WPS PIN, QR & Speedtest)")
         console.print("   [0] Keluar")
 
         choice = Prompt.ask("\n   Pilihan Anda", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"], default="1")
@@ -734,13 +740,16 @@ def run_interactive():
                 console.print("\n[bold cyan]=== [MODE TEKNISI LAPANGAN / FIELD SUITE] ===[/bold cyan]")
                 console.print("   [1] Scan Semua Wi-Fi Sekitar di Udara (Lihat SSID, Sinyal, Vendor & Status WPS)")
                 console.print("   [2] Filter Khusus Wi-Fi dengan WPS Terbuka / Aktif (Unlocked WPS Scanner)")
-                console.print("   [3] Ekstrak Wi-Fi ONT & QR Code (Konek Instan via Gateway/LAN/WAN IP)")
-                console.print("   [4] Hitung Manual Default WPS PIN Router dari BSSID / MAC Address")
-                console.print("   [5] Uji Kualitas Jaringan & Speedtest (Ping, Jitter, Bandwidth)")
-                console.print("   [6] Laporan Pekerjaan Lapangan & Kirim ke Telegram (Proof of Work)")
+                console.print("   [3] Brute Force WPA2/WPA3 Password Wi-Fi (Kamus Bawaan, Pola Vendor MAC & Custom)")
+                console.print("   [4] Revealer / Tebak Nama Hidden SSID Tersembunyi (Probe Attack & ISP Wordlist)")
+                console.print("   [5] Automated WPS PIN Attacker (Eksekusi PIN Otomatis ke BSSID / AP)")
+                console.print("   [6] Ekstrak Wi-Fi ONT & QR Code (Konek Instan via Gateway/LAN/WAN IP)")
+                console.print("   [7] Hitung Manual Default WPS PIN Router dari BSSID / MAC Address")
+                console.print("   [8] Uji Kualitas Jaringan & Speedtest (Ping, Jitter, Bandwidth)")
+                console.print("   [9] Laporan Pekerjaan Lapangan & Kirim ke Telegram (Proof of Work)")
                 console.print("   [0] Kembali ke Menu Utama")
 
-                t_choice = Prompt.ask("\n   Pilihan Toolkit", choices=["0", "1", "2", "3", "4", "5", "6"], default="1")
+                t_choice = Prompt.ask("\n   Pilihan Toolkit", choices=["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"], default="1")
 
                 if t_choice == "0":
                     break
@@ -793,7 +802,7 @@ def run_interactive():
                         )
                     console.print(air_table)
 
-                    console.print("\n[bold yellow]Pilih nomor Wi-Fi target untuk analisis PIN & info detail (atau tekan Enter untuk kembali):[/bold yellow]")
+                    console.print("\n[bold yellow]Pilih nomor Wi-Fi target untuk eksekusi langsung (atau tekan Enter untuk kembali):[/bold yellow]")
                     target_sel = Prompt.ask("   Pilih Nomor Wi-Fi", default="")
                     if target_sel.isdigit() and 1 <= int(target_sel) <= len(nearby_aps):
                         chosen_ap = nearby_aps[int(target_sel) - 1]
@@ -803,22 +812,156 @@ def run_interactive():
                         console.print(f"   Kekuatan     : {chosen_ap['rssi']} dBm ({chosen_ap['band']} Channel {chosen_ap['channel']})")
                         console.print(f"   Status WPS   : {wps_info.get('badge', '-')} — [dim]{wps_info.get('state', '-')}[/dim]")
                         console.print(f"   Enkripsi     : {chosen_ap['security']}")
-                        
-                        pins = calculate_wps_pins(chosen_ap["bssid"])
-                        if pins:
-                            wps_table = Table(title=f"Kalkulasi Kemungkinan Default WPS PIN ({chosen_ap['bssid']})", border_style="green")
-                            wps_table.add_column("No", justify="center", style="dim")
-                            wps_table.add_column("Algoritma / Target Vendor", style="bold white")
-                            wps_table.add_column("Perkiraan PIN", style="bold green", justify="center")
-                            wps_table.add_column("Akurasi", justify="center", style="yellow")
-                            wps_table.add_column("Keterangan", style="dim")
-                            for p_idx, p in enumerate(pins, 1):
-                                wps_table.add_row(str(p_idx), p["algorithm"], f"[bold green]{p['pin']}[/bold green]", p["confidence"], p["desc"])
-                            console.print(wps_table)
+
+                        console.print("\n[bold cyan]Pilih tindakan untuk AP target ini:[/bold cyan]")
+                        console.print("   [1] Brute Force WPA2/WPA3 Password (Kamus & Pola MAC/Vendor)")
+                        if chosen_ap['ssid'] == "<Hidden SSID>":
+                            console.print("   [2] Ungkap / Tebak Nama Asli Hidden SSID (Probe Attack)")
+                        if wps_info.get("has_wps"):
+                            console.print("   [3] Eksekusi Automated WPS PIN Attack (Coba PIN Langsung)")
+                        console.print("   [4] Hitung & Tampilkan Ulang Daftar Default PIN Saja")
+                        console.print("   [0] Kembali ke Daftar")
+
+                        act_choices = ["0", "1", "4"]
+                        if chosen_ap['ssid'] == "<Hidden SSID>":
+                            act_choices.append("2")
+                        if wps_info.get("has_wps"):
+                            act_choices.append("3")
+
+                        act_sel = Prompt.ask("   Pilihan Tindakan", choices=act_choices, default="1")
+                        if act_sel == "1":
+                            run_wifi_wpa_bruteforce(ssid=chosen_ap["ssid"], bssid=chosen_ap["bssid"])
+                        elif act_sel == "2":
+                            rev_res = run_hidden_ssid_revealer(
+                                bssid=chosen_ap["bssid"],
+                                channel=chosen_ap["channel"],
+                                vendor=chosen_ap["vendor"]
+                            )
+                            if rev_res.get("success") and rev_res.get("revealed_ssid"):
+                                if Confirm.ask("\n   Langsung jalankan Brute Force Password untuk SSID yang terungkap ini?", default=True):
+                                    run_wifi_wpa_bruteforce(ssid=rev_res["revealed_ssid"], bssid=chosen_ap["bssid"])
+                        elif act_sel == "3":
+                            run_wps_pin_attack(bssid=chosen_ap["bssid"], ssid=chosen_ap["ssid"])
+                        elif act_sel == "4":
+                            pins = calculate_wps_pins(chosen_ap["bssid"])
+                            if pins:
+                                wps_table = Table(title=f"Kalkulasi Kemungkinan Default WPS PIN ({chosen_ap['bssid']})", border_style="green")
+                                wps_table.add_column("No", justify="center", style="dim")
+                                wps_table.add_column("Algoritma / Target Vendor", style="bold white")
+                                wps_table.add_column("Perkiraan PIN", style="bold green", justify="center")
+                                wps_table.add_column("Akurasi", justify="center", style="yellow")
+                                wps_table.add_column("Keterangan", style="dim")
+                                for p_idx, p in enumerate(pins, 1):
+                                    wps_table.add_row(str(p_idx), p["algorithm"], f"[bold green]{p['pin']}[/bold green]", p["confidence"], p["desc"])
+                                console.print(wps_table)
                     continue
 
                 elif t_choice == "3":
-                    # 3. Ekstrak Wi-Fi & QR Code
+                    # 3. Brute Force WPA2/WPA3 Password
+                    console.print("\n[bold cyan]=== [BRUTE FORCE WPA2/WPA3 WI-FI PASSWORD] ===[/bold cyan]")
+                    target_ssid = Prompt.ask("   Nama SSID Wi-Fi Target")
+                    if not target_ssid.strip():
+                        console.print("[bold red]SSID tidak boleh kosong![/bold red]")
+                        continue
+                    target_bssid = Prompt.ask("   BSSID / MAC Router (Opsional, untuk pola vendor)", default="")
+
+                    console.print("\n   [1] Otomatis (Pola Pintar MAC/BSSID + Kamus Bawaan ISP + passwords.txt)")
+                    console.print("   [2] Gunakan File Wordlist Kustom (.txt)")
+                    console.print("   [3] Masukkan Manual Daftar Password")
+                    src_mode = Prompt.ask("   Sumber Wordlist", choices=["1", "2", "3"], default="1")
+
+                    cands = None
+                    if src_mode == "2":
+                        w_path = Prompt.ask("   Path File Wordlist (.txt)")
+                        if os.path.isfile(w_path):
+                            cands = generate_wifi_password_candidates(ssid=target_ssid, bssid=target_bssid, wordlist_file=w_path)
+                        else:
+                            console.print(f"[bold red]File {w_path} tidak ditemukan! Menggunakan daftar bawaan.[/bold red]")
+                    elif src_mode == "3":
+                        man_pass = Prompt.ask("   Daftar Password (pisahkan dengan koma/spasi)")
+                        extra = [p.strip() for p in man_pass.replace(",", " ").split() if p.strip()]
+                        cands = generate_wifi_password_candidates(ssid=target_ssid, bssid=target_bssid, extra_passwords=extra)
+
+                    timeout_in = Prompt.ask("   Timeout per Percobaan (detik)", default="6")
+                    t_val = int(timeout_in) if timeout_in.isdigit() and int(timeout_in) > 0 else 6
+
+                    run_wifi_wpa_bruteforce(
+                        ssid=target_ssid,
+                        bssid=target_bssid,
+                        candidates=cands,
+                        timeout_per_pass=t_val
+                    )
+                    continue
+
+                elif t_choice == "4":
+                    # 4. Hidden SSID Revealer
+                    console.print("\n[bold cyan]=== [REVEALER NAMA HIDDEN SSID TERSEMBUNYI] ===[/bold cyan]")
+                    target_bssid = Prompt.ask("   BSSID / MAC Router Target (Contoh: 14:AD:CA:51:97:F1)")
+                    if not target_bssid.strip():
+                        console.print("[bold red]BSSID tidak boleh kosong![/bold red]")
+                        continue
+                    target_chan = Prompt.ask("   Channel / Kanal Wi-Fi (Opsional)", default="")
+                    target_vendor = Prompt.ask("   Nama Vendor / Manufaktur (Opsional)", default="")
+
+                    console.print("\n   [1] Otomatis (Pola Vendor OUI + Suffix MAC + Kamus Default ISP)")
+                    console.print("   [2] Gunakan File Wordlist SSID Kustom (.txt)")
+                    src_mode = Prompt.ask("   Sumber Wordlist SSID", choices=["1", "2"], default="1")
+
+                    cands = None
+                    if src_mode == "2":
+                        w_path = Prompt.ask("   Path File Wordlist (.txt)")
+                        if os.path.isfile(w_path):
+                            cands = generate_hidden_ssid_candidates(bssid=target_bssid, vendor=target_vendor, custom_wordlist_file=w_path)
+                        else:
+                            console.print(f"[bold red]File {w_path} tidak ditemukan! Menggunakan daftar bawaan.[/bold red]")
+
+                    rev_res = run_hidden_ssid_revealer(
+                        bssid=target_bssid,
+                        channel=target_chan,
+                        vendor=target_vendor,
+                        candidates=cands
+                    )
+
+                    if rev_res.get("success") and rev_res.get("revealed_ssid"):
+                        if Confirm.ask("\n   Langsung jalankan Brute Force Password untuk SSID yang terungkap ini?", default=True):
+                            run_wifi_wpa_bruteforce(ssid=rev_res["revealed_ssid"], bssid=target_bssid)
+                    continue
+
+                elif t_choice == "5":
+                    # 5. Automated WPS PIN Attacker
+                    console.print("\n[bold cyan]=== [AUTOMATED WPS PIN ATTACKER] ===[/bold cyan]")
+                    target_bssid = Prompt.ask("   BSSID / MAC Router Target (Contoh: 14:AD:CA:51:97:F1)")
+                    if not target_bssid.strip():
+                        console.print("[bold red]BSSID tidak boleh kosong![/bold red]")
+                        continue
+                    target_ssid = Prompt.ask("   Nama SSID (Opsional)", default="")
+
+                    console.print("\n   [1] Semua Algoritma Vendor + Database Static Default (Direkomendasikan)")
+                    console.print("   [2] Hanya Algoritma Spesifik BSSID")
+                    console.print("   [3] Masukkan PIN Manual Kustom untuk Diuji")
+                    pin_mode = Prompt.ask("   Mode PIN", choices=["1", "2", "3"], default="1")
+
+                    cands = None
+                    if pin_mode == "2":
+                        cands = calculate_wps_pins(target_bssid)
+                    elif pin_mode == "3":
+                        man_pins = Prompt.ask("   Masukkan PIN (pisahkan koma/spasi)")
+                        pin_list_in = [p.strip() for p in man_pins.replace(",", " ").split() if p.strip()]
+                        cands = [{"algorithm": "Custom Input", "pin": p, "confidence": "Manual", "desc": "User Input"} for p in pin_list_in]
+
+                    timeout_in = Prompt.ask("   Timeout per PIN (detik)", default="12")
+                    t_val = int(timeout_in) if timeout_in.isdigit() and int(timeout_in) > 0 else 12
+
+                    run_wps_pin_attack(
+                        bssid=target_bssid,
+                        ssid=target_ssid,
+                        pin_candidates=cands,
+                        timeout_per_pin=t_val
+                    )
+                    continue
+
+                elif t_choice == "6":
+                    # 6. Ekstrak Wi-Fi ONT & QR Code
                     gw = get_default_gateway()
                     def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
                     target_ip = Prompt.ask("   IP Address ONT/Modem Target", default=def_ip)
@@ -848,8 +991,8 @@ def run_interactive():
                         console.print(Panel(qr_ascii, title=f"[bold green]QR CODE WI-FI: {wifi['ssid']}[/bold green]", border_style="green", expand=False))
                     continue
 
-                elif t_choice == "4":
-                    # 4. WPS PIN Calculator Manual
+                elif t_choice == "7":
+                    # 7. WPS PIN Calculator Manual
                     mac_in = Prompt.ask("   Masukkan BSSID / MAC Address Router (Contoh: 14:AD:CA:51:97:F1)")
                     pins = calculate_wps_pins(mac_in)
                     if not pins:
@@ -869,8 +1012,8 @@ def run_interactive():
                     console.print("[dim]Gunakan PIN di atas pada menu WPS PIN / PIN Connection di perangkat HP atau router.[/dim]")
                     continue
 
-                elif t_choice == "5":
-                    # 5. Network Latency & Speedtest
+                elif t_choice == "8":
+                    # 8. Network Latency & Speedtest
                     gw = get_default_gateway()
                     gw_ip = gw['gateway_ip'] if gw else "192.168.1.1"
 
@@ -897,8 +1040,8 @@ def run_interactive():
                     ))
                     continue
 
-                elif t_choice == "6":
-                    # 6. Job Report & Telegram Dispatch
+                elif t_choice == "9":
+                    # 9. Job Report & Telegram Dispatch
                     gw = get_default_gateway()
                     def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
 

