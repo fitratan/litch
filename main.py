@@ -732,37 +732,46 @@ def run_interactive():
             # Mode Teknisi Lapangan (Field Suite)
             while True:
                 console.print("\n[bold cyan]=== [MODE TEKNISI LAPANGAN / FIELD SUITE] ===[/bold cyan]")
-                console.print("   [1] Scan Wi-Fi Sekitar di Udara (Lihat SSID, Sinyal, Vendor & Auto-PIN)")
-                console.print("   [2] Ekstrak Wi-Fi ONT & QR Code (Konek Instan via Gateway/LAN)")
-                console.print("   [3] Hitung Manual Default WPS PIN Router dari BSSID / MAC Address")
-                console.print("   [4] Uji Kualitas Jaringan & Speedtest (Ping, Jitter, Bandwidth)")
-                console.print("   [5] Laporan Pekerjaan Lapangan & Kirim ke Telegram (Proof of Work)")
+                console.print("   [1] Scan Semua Wi-Fi Sekitar di Udara (Lihat SSID, Sinyal, Vendor & Status WPS)")
+                console.print("   [2] Filter Khusus Wi-Fi dengan WPS Terbuka / Aktif (Unlocked WPS Scanner)")
+                console.print("   [3] Ekstrak Wi-Fi ONT & QR Code (Konek Instan via Gateway/LAN/WAN IP)")
+                console.print("   [4] Hitung Manual Default WPS PIN Router dari BSSID / MAC Address")
+                console.print("   [5] Uji Kualitas Jaringan & Speedtest (Ping, Jitter, Bandwidth)")
+                console.print("   [6] Laporan Pekerjaan Lapangan & Kirim ke Telegram (Proof of Work)")
                 console.print("   [0] Kembali ke Menu Utama")
 
-                t_choice = Prompt.ask("\n   Pilihan Toolkit", choices=["0", "1", "2", "3", "4", "5"], default="1")
+                t_choice = Prompt.ask("\n   Pilihan Toolkit", choices=["0", "1", "2", "3", "4", "5", "6"], default="1")
 
                 if t_choice == "0":
                     break
 
-                if t_choice == "1":
-                    # 1. Scan Wi-Fi di Udara (Nearby AP Scanner)
-                    console.print("\n[bold yellow]Memindai Sinyal Wi-Fi di Udara (2.4GHz & 5GHz)...[/bold yellow]")
+                if t_choice in ["1", "2"]:
+                    # 1. Scan Wi-Fi di Udara (All or WPS Only)
+                    filter_wps = (t_choice == "2")
+                    scan_title = "Filter Khusus Wi-Fi dengan WPS Terbuka (Unlocked)" if filter_wps else "Pemindaian Sinyal Wi-Fi di Udara (2.4GHz & 5GHz)"
+                    console.print(f"\n[bold yellow]{scan_title}...[/bold yellow]")
+
                     with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"), console=console) as progress:
                         task_air = progress.add_task("[cyan]Scanning wireless access points di sekitar...[/cyan]", total=None)
-                        nearby_aps = scan_nearby_wifi_air()
+                        nearby_aps = scan_nearby_wifi_air(wps_only=filter_wps)
 
                     if not nearby_aps:
-                        console.print("[bold red][!] Tidak ada Wi-Fi yang terdeteksi, atau interface Wi-Fi HP/Linux sedang nonaktif.[/bold red]")
-                        console.print("[dim]Tips di Android/Termux: Pastikan GPS/Location aktif dan Termux:API terinstall.[/dim]")
+                        if filter_wps:
+                            console.print("[bold yellow][!] Tidak ada Wi-Fi di sekitar yang memiliki fitur WPS Terbuka / Unlocked.[/bold yellow]")
+                        else:
+                            console.print("[bold red][!] Tidak ada Wi-Fi yang terdeteksi, atau interface Wi-Fi HP/Linux sedang nonaktif.[/bold red]")
+                            console.print("[dim]Tips di Android/Termux: Pastikan GPS/Location aktif dan Termux:API terinstall.[/dim]")
                         continue
 
-                    air_table = Table(title=f"Daftar Wi-Fi Sekitar Terdeteksi ({len(nearby_aps)} AP)", border_style="cyan")
+                    tbl_title = f"Daftar Wi-Fi dengan WPS Terbuka ({len(nearby_aps)} AP)" if filter_wps else f"Daftar Wi-Fi Sekitar Terdeteksi ({len(nearby_aps)} AP)"
+                    air_table = Table(title=tbl_title, border_style="cyan")
                     air_table.add_column("No", justify="center", style="dim")
                     air_table.add_column("Nama SSID", style="bold white")
                     air_table.add_column("BSSID / MAC", style="cyan")
                     air_table.add_column("Vendor / Manufaktur", style="yellow")
                     air_table.add_column("Sinyal RSSI", justify="center")
                     air_table.add_column("Kekuatan", justify="left")
+                    air_table.add_column("Status WPS", justify="center")
                     air_table.add_column("Frekuensi", justify="center")
                     air_table.add_column("Keamanan", style="dim")
 
@@ -770,26 +779,30 @@ def run_interactive():
                         bar_str, label_str = get_signal_bar(ap["rssi"])
                         sig_display = f"{bar_str} {ap['rssi']} dBm"
                         freq_display = f"{ap['band']} (Ch {ap['channel']})"
-                        wps_badge = " [bold green][WPS][/bold green]" if ap.get("has_wps") else ""
+                        wps_badge = ap.get("wps", {}).get("badge", "[dim]NONAKTIF[/dim]")
                         air_table.add_row(
                             str(idx),
-                            f"[bold white]{ap['ssid']}[/bold white]{wps_badge}",
+                            f"[bold white]{ap['ssid']}[/bold white]",
                             ap["bssid"],
                             ap["vendor"],
                             sig_display,
                             label_str,
+                            wps_badge,
                             freq_display,
                             ap["security"]
                         )
                     console.print(air_table)
 
-                    console.print("\n[bold yellow]Pilih nomor Wi-Fi target untuk analisis WPS PIN otomatis (atau tekan Enter untuk kembali):[/bold yellow]")
+                    console.print("\n[bold yellow]Pilih nomor Wi-Fi target untuk analisis PIN & info detail (atau tekan Enter untuk kembali):[/bold yellow]")
                     target_sel = Prompt.ask("   Pilih Nomor Wi-Fi", default="")
                     if target_sel.isdigit() and 1 <= int(target_sel) <= len(nearby_aps):
                         chosen_ap = nearby_aps[int(target_sel) - 1]
-                        console.print(f"\n[bold green]=== ANALISIS PERANGKAT: {chosen_ap['ssid']} ({chosen_ap['bssid']}) ===[/bold green]")
-                        console.print(f"   Manufaktur : [bold yellow]{chosen_ap['vendor']}[/bold yellow]")
-                        console.print(f"   Kekuatan   : {chosen_ap['rssi']} dBm ({chosen_ap['band']} Channel {chosen_ap['channel']})")
+                        wps_info = chosen_ap.get("wps", {})
+                        console.print(f"\n[bold green]=== INFORMASI TARGET: {chosen_ap['ssid']} ({chosen_ap['bssid']}) ===[/bold green]")
+                        console.print(f"   Manufaktur   : [bold yellow]{chosen_ap['vendor']}[/bold yellow]")
+                        console.print(f"   Kekuatan     : {chosen_ap['rssi']} dBm ({chosen_ap['band']} Channel {chosen_ap['channel']})")
+                        console.print(f"   Status WPS   : {wps_info.get('badge', '-')} — [dim]{wps_info.get('state', '-')}[/dim]")
+                        console.print(f"   Enkripsi     : {chosen_ap['security']}")
                         
                         pins = calculate_wps_pins(chosen_ap["bssid"])
                         if pins:
@@ -804,8 +817,8 @@ def run_interactive():
                             console.print(wps_table)
                     continue
 
-                elif t_choice == "2":
-                    # 2. Ekstrak Wi-Fi & QR Code
+                elif t_choice == "3":
+                    # 3. Ekstrak Wi-Fi & QR Code
                     gw = get_default_gateway()
                     def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
                     target_ip = Prompt.ask("   IP Address ONT/Modem Target", default=def_ip)
@@ -835,8 +848,8 @@ def run_interactive():
                         console.print(Panel(qr_ascii, title=f"[bold green]QR CODE WI-FI: {wifi['ssid']}[/bold green]", border_style="green", expand=False))
                     continue
 
-                elif t_choice == "3":
-                    # 3. WPS PIN Calculator Manual
+                elif t_choice == "4":
+                    # 4. WPS PIN Calculator Manual
                     mac_in = Prompt.ask("   Masukkan BSSID / MAC Address Router (Contoh: 14:AD:CA:51:97:F1)")
                     pins = calculate_wps_pins(mac_in)
                     if not pins:
@@ -856,8 +869,8 @@ def run_interactive():
                     console.print("[dim]Gunakan PIN di atas pada menu WPS PIN / PIN Connection di perangkat HP atau router.[/dim]")
                     continue
 
-                elif t_choice == "4":
-                    # 4. Network Latency & Speedtest
+                elif t_choice == "5":
+                    # 5. Network Latency & Speedtest
                     gw = get_default_gateway()
                     gw_ip = gw['gateway_ip'] if gw else "192.168.1.1"
 
@@ -884,8 +897,8 @@ def run_interactive():
                     ))
                     continue
 
-                elif t_choice == "5":
-                    # 5. Job Report & Telegram Dispatch
+                elif t_choice == "6":
+                    # 6. Job Report & Telegram Dispatch
                     gw = get_default_gateway()
                     def_ip = gw['gateway_ip'] if gw else "192.168.1.1"
 

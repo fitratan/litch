@@ -97,7 +97,35 @@ def lookup_vendor_by_mac(mac_str: str) -> str:
     return "Unknown / Generic Router"
 
 
-def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
+def parse_wps_state(capabilities_str: str = "", wps_val: str = "") -> Dict[str, Any]:
+    """
+    Parse WPS capabilities to determine if WPS is Open (Unlocked), Locked, or Disabled.
+    """
+    combined = f"{capabilities_str} {wps_val}".upper()
+    if "WPS-LOCKED" in combined or "LOCKED" in combined:
+        return {
+            "has_wps": True,
+            "is_locked": True,
+            "state": "Locked (Terkunci AP)",
+            "badge": "[bold red]LOCKED[/bold red]"
+        }
+    elif "WPS" in combined or "YES" in combined or "PBC" in combined or "PIN" in combined:
+        return {
+            "has_wps": True,
+            "is_locked": False,
+            "state": "Open (Terbuka / Aktif)",
+            "badge": "[bold green]TERBUKA[/bold green]"
+        }
+    else:
+        return {
+            "has_wps": False,
+            "is_locked": False,
+            "state": "Disabled / Nonaktif",
+            "badge": "[dim]NONAKTIF[/dim]"
+        }
+
+
+def scan_nearby_wifi_air(wps_only: bool = False) -> List[Dict[str, Any]]:
     """
     Scan all broadcast Wi-Fi SSIDs in the air without being connected.
     Supports Android Termux (termux-wifi-scaninfo), nmcli, iwlist, and wpa_cli.
@@ -119,6 +147,9 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                     freq = item.get("frequency_mhz", 2412)
                     chan = (freq - 2407) // 5 if freq < 3000 else (freq - 5000) // 5
                     sec = item.get("capabilities", "WPA2")
+                    wps_info = parse_wps_state(sec)
+                    if wps_only and not (wps_info["has_wps"] and not wps_info["is_locked"]):
+                        continue
                     results.append({
                         "ssid": item.get("ssid") or "<Hidden SSID>",
                         "bssid": bssid,
@@ -127,7 +158,8 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                         "band": "5GHz" if freq > 3000 else "2.4GHz",
                         "channel": str(chan),
                         "security": sec,
-                        "has_wps": "WPS" in sec.upper(),
+                        "wps": wps_info,
+                        "has_wps": wps_info["has_wps"],
                         "vendor": lookup_vendor_by_mac(bssid)
                     })
                 if results:
@@ -149,8 +181,6 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                     # Format: SSID:BSSID:CHAN:FREQ:SIGNAL:SECURITY:WPS
                     parts = line.split(":")
                     if len(parts) >= 6:
-                        # BSSID might have escaped colons or split into parts
-                        # Find the MAC-like portion
                         mac_match = re.search(r"([0-9A-Fa-f]{2}(?:\\?:[0-9A-Fa-f]{2}){5})", line)
                         if not mac_match:
                             continue
@@ -160,7 +190,6 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                         seen_bssids.add(raw_bssid)
 
                         ssid = parts[0].strip() or "<Hidden SSID>"
-                        # Find other fields
                         sig = parts[-3] if len(parts) >= 7 else parts[-2]
                         sec = parts[-2] if len(parts) >= 7 else parts[-1]
                         wps_val = parts[-1] if len(parts) >= 7 else ""
@@ -170,8 +199,10 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                         except Exception:
                             rssi_calc = -70
 
-                        freq_str = line
                         is_5g = "5" in line and ("5180" in line or "5240" in line or "5745" in line or "5805" in line)
+                        wps_info = parse_wps_state(sec, wps_val)
+                        if wps_only and not (wps_info["has_wps"] and not wps_info["is_locked"]):
+                            continue
 
                         results.append({
                             "ssid": ssid,
@@ -181,7 +212,8 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                             "band": "5GHz" if is_5g else "2.4GHz",
                             "channel": parts[2] if len(parts) > 2 and parts[2].isdigit() else "-",
                             "security": sec or "WPA2",
-                            "has_wps": "yes" in wps_val.lower() or "wps" in sec.lower(),
+                            "wps": wps_info,
+                            "has_wps": wps_info["has_wps"],
                             "vendor": lookup_vendor_by_mac(raw_bssid)
                         })
                 if results:
@@ -208,6 +240,9 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                         ssid = essid_m.group(1) if essid_m else "<Hidden SSID>"
                         rssi = int(sig_m.group(1)) if sig_m else -70
                         chan = chan_m.group(1) if chan_m else "-"
+                        wps_info = parse_wps_state(c)
+                        if wps_only and not (wps_info["has_wps"] and not wps_info["is_locked"]):
+                            continue
                         results.append({
                             "ssid": ssid,
                             "bssid": bssid,
@@ -216,7 +251,8 @@ def scan_nearby_wifi_air() -> List[Dict[str, Any]]:
                             "band": "5GHz" if chan.isdigit() and int(chan) > 14 else "2.4GHz",
                             "channel": chan,
                             "security": "WPA2" if "WPA2" in c else ("WPA" if "WPA" in c else "Open"),
-                            "has_wps": "WPS" in c or "Wi-Fi Protected Setup" in c,
+                            "wps": wps_info,
+                            "has_wps": wps_info["has_wps"],
                             "vendor": lookup_vendor_by_mac(bssid)
                         })
                 if results:
