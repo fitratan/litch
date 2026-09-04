@@ -831,10 +831,15 @@ def run_interactive():
                         console.print(f"   Status WPS   : {wps_info.get('badge', '-')} — [dim]{wps_info.get('state', '-')}[/dim]")
                         console.print(f"   Enkripsi     : {chosen_ap['security']}")
 
+                        wps_is_open = (wps_info.get("has_wps", False) and not wps_info.get("is_locked", False)) or wps_info.get("state") == "manual"
+
                         console.print("\n[bold cyan]Pilih tindakan untuk AP target ini:[/bold cyan]")
-                        console.print("   [1] Brute Force WPA2/WPA3 Password (Kamus ISP, Pola MAC/Vendor & Wordlist)")
+                        console.print("   [1] Brute Force WPA2/WPA3 Password (Kamus Populer Indonesia, ISP & Wordlist)")
                         console.print("   [2] Revealer / Tebak Nama Hidden SSID (Active Probe Attack)")
-                        console.print("   [3] Automated WPS PIN Attacker (Eksekusi PIN Otomatis ke AP)")
+                        if wps_is_open:
+                            console.print("   [3] Automated WPS PIN Attacker ([bold green]WPS TERBUKA / AKTIF[/bold green])")
+                        else:
+                            console.print(f"   [3] [dim]Automated WPS PIN Attacker ({wps_info.get('badge', 'NONAKTIF')}) — Hanya untuk WPS Terbuka[/dim]")
                         console.print("   [4] Hitung & Tampilkan Perkiraan Default WPS PIN Saja")
                         console.print("   [0] Kembali ke Daftar")
 
@@ -889,6 +894,12 @@ def run_interactive():
                                 if Confirm.ask("\n   Langsung jalankan Brute Force Password untuk SSID yang terungkap ini?", default=True):
                                     run_wifi_wpa_bruteforce(ssid=rev_res["revealed_ssid"], bssid=chosen_ap["bssid"])
                         elif act_sel == "3":
+                            if not wps_is_open:
+                                console.print(f"\n[bold red][!] Target {chosen_ap['ssid']} ({chosen_ap['bssid']}) memiliki status WPS: {wps_info.get('badge', 'NONAKTIF')} — {wps_info.get('state', 'Nonaktif')}.[/bold red]")
+                                console.print("[yellow]Automated WPS PIN Attacker hanya dapat dijalankan pada Access Point dengan status WPS Terbuka / Aktif.[/yellow]")
+                                if not Confirm.ask("   Paksa tetap eksekusi WPS PIN ke target ini?", default=False):
+                                    continue
+
                             console.print("\n   [1] Semua Algoritma Vendor + Database Static Default (Direkomendasikan)")
                             console.print("   [2] Hanya Algoritma Spesifik BSSID")
                             console.print("   [3] Masukkan PIN Manual Kustom untuk Diuji")
