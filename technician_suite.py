@@ -489,7 +489,7 @@ def generate_wifi_password_candidates(
     - Smart MAC/BSSID patterns (hex suffixes, vendor permutations)
     - SSID-derived contextual patterns
     - Indonesian ISP default passwords (Telkom/IndiHome, Biznet, MyRepublic, etc.)
-    - passwords.txt & DEFAULT_CREDENTIALS
+    - Dedicated wifi_passwords.txt wordlist
     - Optional custom wordlist file
     Ensures candidates meet WPA-PSK standard (8-63 ASCII characters).
     """
@@ -630,13 +630,23 @@ def generate_wifi_password_candidates(
     for p in isp_common_passwords:
         add_cand(p)
 
-    # 6. Include passwords from credentials.py / passwords.txt
-    try:
-        from credentials import get_credentials
-        for _, p in get_credentials():
-            add_cand(p)
-    except Exception:
-        pass
+    # 6. Include passwords from dedicated wifi_passwords.txt if present
+    wifi_pass_paths = [
+        "wifi_passwords.txt",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "wifi_passwords.txt"),
+        os.path.join(os.getcwd(), "wifi_passwords.txt")
+    ]
+    for wfp in wifi_pass_paths:
+        if os.path.isfile(wfp):
+            try:
+                with open(wfp, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        line_str = line.strip()
+                        if line_str and not line_str.startswith("#"):
+                            add_cand(line_str)
+                break
+            except Exception:
+                pass
 
     return candidates
 

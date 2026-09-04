@@ -840,7 +840,7 @@ def run_interactive():
 
                         act_sel = Prompt.ask("   Pilihan Tindakan", choices=["0", "1", "2", "3", "4"], default="1")
                         if act_sel == "1":
-                            console.print("\n   [1] Otomatis (Pola Pintar MAC/BSSID + Kamus Bawaan ISP + passwords.txt)")
+                            console.print("\n   [1] Otomatis (Pola Pintar MAC/BSSID + Kamus Bawaan ISP + wifi_passwords.txt)")
                             console.print("   [2] Gunakan File Wordlist Kustom (.txt)")
                             console.print("   [3] Masukkan Manual Daftar Password")
                             src_mode = Prompt.ask("   Sumber Wordlist", choices=["1", "2", "3"], default="1")
